@@ -19,6 +19,7 @@ import com.google.cloud.teleport.v2.datastream.io.CdcJdbcIO.DataSourceConfigurat
 import com.google.cloud.teleport.v2.datastream.values.DmlInfo;
 import com.google.cloud.teleport.v2.utils.DatastreamToDML;
 import com.google.cloud.teleport.v2.utils.DatastreamToMySQLDML;
+import com.google.cloud.teleport.v2.utils.DatastreamToOracleDML;
 import com.google.cloud.teleport.v2.utils.DatastreamToPostgresDML;
 import com.google.cloud.teleport.v2.values.FailsafeElement;
 import java.util.HashMap;
@@ -43,14 +44,16 @@ public class CreateDml
   private static final String WINDOW_DURATION = "1s";
   private static final Integer NUM_THREADS = new Integer(100);
   private static DataSourceConfiguration dataSourceConfiguration;
+  private static DataSourceConfiguration targetDataSourceConfiguration;
   private static Map<String, String> schemaMap = new HashMap<String, String>();
 
-  private CreateDml(DataSourceConfiguration dataSourceConfiguration) {
+  private CreateDml(DataSourceConfiguration dataSourceConfiguration, DataSourceConfiguration targetDataSourceConfiguration) {
     this.dataSourceConfiguration = dataSourceConfiguration;
+    this.targetDataSourceConfiguration = targetDataSourceConfiguration;
   }
 
-  public static CreateDml of(DataSourceConfiguration dataSourceConfiguration) {
-    return new CreateDml(dataSourceConfiguration);
+  public static CreateDml of(DataSourceConfiguration dataSourceConfiguration,DataSourceConfiguration targetDataSourceConfiguration) {
+    return new CreateDml(dataSourceConfiguration,targetDataSourceConfiguration);
   }
 
   public CreateDml withSchemaMap(Map<String, String> schemaMap) {
@@ -60,13 +63,16 @@ public class CreateDml
 
   public DatastreamToDML getDatastreamToDML() {
     DatastreamToDML datastreamToDML;
-    String driverName = this.dataSourceConfiguration.getDriverClassName().get();
+    String driverName = this.targetDataSourceConfiguration.getDriverClassName().get();
     switch (driverName) {
       case "org.postgresql.Driver":
         datastreamToDML = DatastreamToPostgresDML.of(dataSourceConfiguration);
         break;
       case "com.mysql.cj.jdbc.Driver":
         datastreamToDML = DatastreamToMySQLDML.of(dataSourceConfiguration);
+        break;
+      case "oracle.jdbc.driver.OracleDriver":
+        datastreamToDML= DatastreamToOracleDML.of(dataSourceConfiguration);
         break;
       default:
         throw new IllegalArgumentException(

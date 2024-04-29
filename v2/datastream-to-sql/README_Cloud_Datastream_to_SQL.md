@@ -92,8 +92,8 @@ the `gcloud` command or Dataflow "Create job from template" UI,
 the `-PtemplatesStage` profile should be used:
 
 ```shell
-export PROJECT=<my-project>
-export BUCKET_NAME=<bucket-name>
+export PROJECT=groupama-isa-qa
+export BUCKET_NAME=isa-flex-template
 
 mvn clean package -PtemplatesStage  \
 -DskipTests \
@@ -126,47 +126,55 @@ need valid resources for the required parameters.
 Provided that, the following command line can be used:
 
 ```shell
-export PROJECT=<my-project>
-export BUCKET_NAME=<bucket-name>
-export REGION=us-central1
+export PROJECT=groupama-isa-qa
+export BUCKET_NAME=isa-flex-template
+export REGION=europe-west3
 export TEMPLATE_SPEC_GCSPATH="gs://$BUCKET_NAME/templates/flex/Cloud_Datastream_to_SQL"
 
 ### Required
-export INPUT_FILE_PATTERN=<inputFilePattern>
-export DATABASE_HOST=<databaseHost>
-export DATABASE_USER=<databaseUser>
-export DATABASE_PASSWORD=<databasePassword>
+export INPUT_FILE_PATTERN=gs://isa-coll-stream
+export DATABASE_HOST=lxqitae11-scan.ra1.intra.groupama.fr
+export DATABASE_USER=ISACLOUD
+export DATABASE_PASSWORD=Isa_001
 
 ### Optional
-export GCS_PUB_SUB_SUBSCRIPTION=<gcsPubSubSubscription>
+export GCS_PUB_SUB_SUBSCRIPTION=projects/groupama-isa-qa/subscriptions/isa-coll-datastream-sub
 export INPUT_FILE_FORMAT=avro
-export STREAM_NAME=<streamName>
-export RFC_START_DATE_TIME=1970-01-01T00:00:00.00Z
-export DATA_STREAM_ROOT_URL=https://datastream.googleapis.com/
-export DATABASE_TYPE=postgres
-export DATABASE_PORT=5432
-export DATABASE_NAME=postgres
-export SCHEMA_MAP=""
-export CUSTOM_CONNECTION_STRING=""
+export DATABASE_TYPE=oracle
+export DATABASE_PORT=36143
+export DATABASE_NAME=AXORAC01
+
+export DATABASE_HOST=lxqitae11-scan.ra1.intra.groupama.fr
+export DATABASE_USER=ISACLOUD
+export DATABASE_PASSWORD=Isa_001
+export DATABASE_TYPE=oracle
+export DATABASE_PORT=36143
+export DATABASE_NAME=AXORAC01
+
+
+
 
 gcloud dataflow flex-template run "cloud-datastream-to-sql-job" \
   --project "$PROJECT" \
   --region "$REGION" \
   --template-file-gcs-location "$TEMPLATE_SPEC_GCSPATH" \
+    --parameters "network=groupama-host-net" \
+  --parameters "subnetwork=https://www.googleapis.com/compute/v1/projects/groupama-host-network/regions/europe-west3/subnetworks/isa-noprod-subnet" \
   --parameters "inputFilePattern=$INPUT_FILE_PATTERN" \
   --parameters "gcsPubSubSubscription=$GCS_PUB_SUB_SUBSCRIPTION" \
   --parameters "inputFileFormat=$INPUT_FILE_FORMAT" \
-  --parameters "streamName=$STREAM_NAME" \
-  --parameters "rfcStartDateTime=$RFC_START_DATE_TIME" \
-  --parameters "dataStreamRootUrl=$DATA_STREAM_ROOT_URL" \
   --parameters "databaseType=$DATABASE_TYPE" \
   --parameters "databaseHost=$DATABASE_HOST" \
   --parameters "databasePort=$DATABASE_PORT" \
   --parameters "databaseUser=$DATABASE_USER" \
   --parameters "databasePassword=$DATABASE_PASSWORD" \
   --parameters "databaseName=$DATABASE_NAME" \
-  --parameters "schemaMap=$SCHEMA_MAP" \
-  --parameters "customConnectionString=$CUSTOM_CONNECTION_STRING"
+  --parameters "sourceDatabaseType=postgres" \
+  --parameters "sourceDatabaseUser=isarest" \
+  --parameters "sourceDatabasePassword=UX9q7t2C#&kp8$%e" \
+  --parameters "sourceDatabaseHost=10.245.182.212" \
+  --parameters "sourceDatabasePort=5432" \
+  --parameters "sourceDatabaseName=isa"
 ```
 
 For more information about the command, please check:

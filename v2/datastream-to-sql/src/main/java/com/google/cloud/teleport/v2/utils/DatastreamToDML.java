@@ -226,7 +226,8 @@ public abstract class DatastreamToDML
           getSqlTemplateValues(
               rowObj, catalogName, schemaName, tableName, primaryKeys, tableSchema);
 
-      String dmlSql = StringSubstitutor.replace(dmlSqlTemplate, sqlTemplateValues, "{", "}");
+      String dmlSql = StringSubstitutor.replace(dmlSqlTemplate, sqlTemplateValues, "{%$", "$%}");
+      LOG.info("DML produced:{}",dmlSql);
       return DmlInfo.of(
           failsafeValue,
           dmlSql,
@@ -277,7 +278,7 @@ public abstract class DatastreamToDML
     sqlTemplateValues.put("quoted_column_names", getColumnsListSql(rowObj, tableSchema));
     sqlTemplateValues.put("column_value_sql", getColumnsValuesSql(rowObj, tableSchema));
     sqlTemplateValues.put("primary_key_names_sql", String.join(",", primaryKeys)); // TODO: quoted?
-    sqlTemplateValues.put("column_kv_sql", getColumnsUpdateSql(rowObj, tableSchema));
+    sqlTemplateValues.put("column_kv_sql", getColumnsUpdateSql(rowObj, tableSchema, primaryKeys));
 
     return sqlTemplateValues;
   }
@@ -373,10 +374,13 @@ public abstract class DatastreamToDML
     return valuesInsertSql;
   }
 
-  public String getColumnsUpdateSql(JsonNode rowObj, Map<String, String> tableSchema) {
+  public String getColumnsUpdateSql(JsonNode rowObj, Map<String, String> tableSchema,  List<String> primaryKeys) {
     String onUpdateSql = "";
     for (Iterator<String> fieldNames = rowObj.fieldNames(); fieldNames.hasNext(); ) {
       String columnName = fieldNames.next();
+      if(primaryKeys.contains(columnName)){
+        continue;
+      }
       if (!tableSchema.containsKey(columnName)) {
         continue;
       }
