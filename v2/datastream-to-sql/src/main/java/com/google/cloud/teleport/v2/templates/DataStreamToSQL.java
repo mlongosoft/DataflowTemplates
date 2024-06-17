@@ -473,7 +473,7 @@ public class DataStreamToSQL {
      */
     PCollection<KV<String, DmlInfo>> dmlStatements =
         datastreamJsonRecords
-            .apply("Format to DML", CreateDml.of(dataSourceConfiguration).withSchemaMap(schemaMap))
+            .apply("Format to DML", CreateDml.of(sourceDataSourceConfiguration,dataSourceConfiguration).withSchemaMap(schemaMap))
             .apply("DML Stateful Processing", ProcessDml.statefulOrderByPK());
 
     /*

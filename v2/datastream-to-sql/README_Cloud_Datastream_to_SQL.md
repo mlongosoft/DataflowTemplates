@@ -105,6 +105,22 @@ mvn clean package -PtemplatesStage  \
 ```
 
 
+```shell
+export PROJECT=groupama-corsaro-nero-prod
+#export PROJECT=groupama-corsaro-nero-noprod
+export BUCKET_NAME=corsaro-nero-flex-template
+#export BUCKET_NAME=corsaro-nero-flex-template-noprod
+
+mvn clean package -PtemplatesStage  \
+-DskipTests \
+-DprojectId="$PROJECT" \
+-DbucketName="$BUCKET_NAME" \
+-DstagePrefix="templates" \
+-DtemplateName="Cloud_Datastream_to_SQL" \
+-f v2/datastream-to-sql
+```
+
+
 The command should build and save the template to Google Cloud, and then print
 the complete location on Cloud Storage:
 
