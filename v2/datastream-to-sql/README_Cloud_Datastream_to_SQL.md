@@ -92,8 +92,8 @@ the `gcloud` command or Dataflow "Create job from template" UI,
 the `-PtemplatesStage` profile should be used:
 
 ```shell
-export PROJECT=groupama-isa-qa
-export BUCKET_NAME=isa-flex-template
+export PROJECT=XXXXX
+export BUCKET_NAME=XXXXX
 
 mvn clean package -PtemplatesStage  \
 -DskipTests \
@@ -106,10 +106,10 @@ mvn clean package -PtemplatesStage  \
 
 
 ```shell
-export PROJECT=groupama-corsaro-nero-prod
-#export PROJECT=groupama-corsaro-nero-noprod
-export BUCKET_NAME=corsaro-nero-flex-template
-#export BUCKET_NAME=corsaro-nero-flex-template-noprod
+export PROJECT=XXXXX
+#export PROJECT=XXXXX
+export BUCKET_NAME=XXXXX
+#export BUCKET_NAME=XXXXX
 
 mvn clean package -PtemplatesStage  \
 -DskipTests \
@@ -142,30 +142,30 @@ need valid resources for the required parameters.
 Provided that, the following command line can be used:
 
 ```shell
-export PROJECT=groupama-isa-qa
-export BUCKET_NAME=isa-flex-template
+export PROJECT=XXXXX
+export BUCKET_NAME=XXXXX
 export REGION=europe-west3
-export TEMPLATE_SPEC_GCSPATH="gs://$BUCKET_NAME/templates/flex/Cloud_Datastream_to_SQL"
+export TEMPLATE_SPEC_GCSPATH=XXXXX
 
 ### Required
-export INPUT_FILE_PATTERN=gs://isa-coll-stream
-export DATABASE_HOST=lxqitae11-scan.ra1.intra.groupama.fr
-export DATABASE_USER=ISACLOUD
-export DATABASE_PASSWORD=Isa_001
+export INPUT_FILE_PATTERN=XXXXx
+export DATABASE_HOST=XXXXX
+export DATABASE_USER=XXXXX
+export DATABASE_PASSWORD=XXXXX
 
 ### Optional
-export GCS_PUB_SUB_SUBSCRIPTION=projects/groupama-isa-qa/subscriptions/isa-coll-datastream-sub
+export GCS_PUB_SUB_SUBSCRIPTION=XXXXX
 export INPUT_FILE_FORMAT=avro
 export DATABASE_TYPE=oracle
-export DATABASE_PORT=36143
-export DATABASE_NAME=AXORAC01
+export DATABASE_PORT=XXXXX
+export DATABASE_NAME=XXXXX
 
-export DATABASE_HOST=lxqitae11-scan.ra1.intra.groupama.fr
-export DATABASE_USER=ISACLOUD
-export DATABASE_PASSWORD=Isa_001
+export DATABASE_HOST=XXXXX
+export DATABASE_USER=XXXXX
+export DATABASE_PASSWORD=XXXXX
 export DATABASE_TYPE=oracle
-export DATABASE_PORT=36143
-export DATABASE_NAME=AXORAC01
+export DATABASE_PORT=XXXXX
+export DATABASE_NAME=XXXXX
 
 
 
