@@ -174,8 +174,8 @@ gcloud dataflow flex-template run "cloud-datastream-to-sql-job" \
   --project "$PROJECT" \
   --region "$REGION" \
   --template-file-gcs-location "$TEMPLATE_SPEC_GCSPATH" \
-    --parameters "network=groupama-host-net" \
-  --parameters "subnetwork=https://www.googleapis.com/compute/v1/projects/groupama-host-network/regions/europe-west3/subnetworks/isa-noprod-subnet" \
+    --parameters "network=XXXXX" \
+  --parameters "subnetwork=https://www.googleapis.com/compute/v1/projects/XXXXX/regions/europe-west3/subnetworks/XXXXX" \
   --parameters "inputFilePattern=$INPUT_FILE_PATTERN" \
   --parameters "gcsPubSubSubscription=$GCS_PUB_SUB_SUBSCRIPTION" \
   --parameters "inputFileFormat=$INPUT_FILE_FORMAT" \
@@ -186,11 +186,11 @@ gcloud dataflow flex-template run "cloud-datastream-to-sql-job" \
   --parameters "databasePassword=$DATABASE_PASSWORD" \
   --parameters "databaseName=$DATABASE_NAME" \
   --parameters "sourceDatabaseType=postgres" \
-  --parameters "sourceDatabaseUser=isarest" \
-  --parameters "sourceDatabasePassword=UX9q7t2C#&kp8$%e" \
-  --parameters "sourceDatabaseHost=10.245.182.212" \
-  --parameters "sourceDatabasePort=5432" \
-  --parameters "sourceDatabaseName=isa"
+  --parameters "sourceDatabaseUser=XXXXX" \
+  --parameters "sourceDatabasePassword=XXXXX" \
+  --parameters "sourceDatabaseHost=XXXXX" \
+  --parameters "sourceDatabasePort=XXXXX" \
+  --parameters "sourceDatabaseName=XXXXX"
 ```
 
 For more information about the command, please check:
