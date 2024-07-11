@@ -92,8 +92,8 @@ the `gcloud` command or Dataflow "Create job from template" UI,
 the `-PtemplatesStage` profile should be used:
 
 ```shell
-export PROJECT=XXXXX
-export BUCKET_NAME=XXXXX
+export PROJECT=groupama-isa-prod
+export BUCKET_NAME=isa-prod-flex-template
 
 mvn clean package -PtemplatesStage  \
 -DskipTests \
@@ -106,9 +106,7 @@ mvn clean package -PtemplatesStage  \
 
 
 ```shell
-export PROJECT=XXXXX
 #export PROJECT=XXXXX
-export BUCKET_NAME=XXXXX
 #export BUCKET_NAME=XXXXX
 
 mvn clean package -PtemplatesStage  \
