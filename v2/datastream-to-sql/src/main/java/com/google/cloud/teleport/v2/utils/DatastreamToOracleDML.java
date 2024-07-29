@@ -106,7 +106,7 @@ public class DatastreamToOracleDML extends DatastreamToDML {
                     for (int i = 0; i < withoutApici.length(); i += 3500) {
                         chunks.add(withoutApici.substring(i, Math.min(withoutApici.length(), i + 3500)));
                     }
-                    LOG.info("VALUE TO clean: {}", withoutApici);
+                    //LOG.info("VALUE TO clean: {}", withoutApici);
                     for (String element : chunks) {
                         if (StringUtils.isEmpty(value)) {
                             value = StringUtils.join("TO_CLOB('", element, "')");
@@ -114,7 +114,7 @@ public class DatastreamToOracleDML extends DatastreamToDML {
                             value = StringUtils.join(value, " || TO_CLOB('", element, "')");
                         }
                     }
-                    LOG.info("Cleaned VALUE: {}", value);
+                    //LOG.info("Cleaned VALUE: {}", value);
                     return value;
                 } else {
                     return columnValue;

@@ -227,7 +227,7 @@ public abstract class DatastreamToDML
               rowObj, catalogName, schemaName, tableName, primaryKeys, tableSchema);
 
       String dmlSql = StringSubstitutor.replace(dmlSqlTemplate, sqlTemplateValues, "{%$", "$%}");
-      LOG.info("DML produced:{}",dmlSql);
+      LOG.info("DML produced: TABLE: {} | PK: {}",tableName,primaryKeys);
       return DmlInfo.of(
           failsafeValue,
           dmlSql,
@@ -426,7 +426,7 @@ public abstract class DatastreamToDML
     } catch (SQLException e) {
       if (retriesRemaining > 0) {
         int sleepSecs = (maxRetries - retriesRemaining + 1) * 10;
-        LOG.info(
+        LOG.warn(
             "SQLException: Will retry after {} seconds: Connection Error: {}",
             sleepSecs,
             e.toString());
@@ -480,7 +480,7 @@ public abstract class DatastreamToDML
       } catch (SQLException e) {
         if (retriesRemaining > 0) {
           int sleepSecs = (MAX_RETRIES - retriesRemaining + 1) * 10;
-          LOG.info(
+          LOG.warn(
               "SQLException, will retry after {} seconds: Failed to Retrieve Schema: {}.{} : {}",
               sleepSecs,
               schemaName,
@@ -490,7 +490,7 @@ public abstract class DatastreamToDML
             Thread.sleep(sleepSecs * 1000);
             return getTableSchema(catalogName, schemaName, tableName, retriesRemaining - 1);
           } catch (InterruptedException i) {
-            LOG.info("InterruptedException retrieving schema: {}.{}", schemaName, tableName);
+            LOG.warn("InterruptedException retrieving schema: {}.{}", schemaName, tableName);
           }
         }
         LOG.error(
