@@ -150,7 +150,7 @@ public class DataStreamToSQL {
         helpText =
             "The starting DateTime used to fetch from Cloud Storage "
                 + "(https://tools.ietf.org/html/rfc3339).")
-    @Default.String("1970-01-01T00:00:00.00Z")
+    @Default.String("1970-01-01T00:00:00Z")
     String getRfcStartDateTime();
 
     void setRfcStartDateTime(String value);
@@ -181,8 +181,8 @@ public class DataStreamToSQL {
     @TemplateParameter.Text(
         order = 8,
         groupName = "Target",
-        description = "Database Host to connect on.",
-        helpText = "The SQL host to connect on.")
+        description = "Database connection string",
+        helpText = "(description=(retry_count=)(retry_delay=)(address=(protocol=(()()())(connect_data=....")
     String getDatabaseHost();
 
     void setDatabaseHost(String value);
@@ -193,7 +193,7 @@ public class DataStreamToSQL {
         optional = true,
         description = "Database Port to connect on.",
         helpText = "The SQL database port to connect to. The default value is `5432`.")
-    @Default.String("5432")
+    @Default.String("")
     String getDatabasePort();
 
     void setDatabasePort(String value);
@@ -277,7 +277,7 @@ public class DataStreamToSQL {
                 description = "Custom connection string.",
                 helpText =
                         "Database Port")
-        @Default.String("5432")
+        @Default.String("")
         String getSourceDatabasePort();
 
         void setSourceDatabasePort(String value);
@@ -359,8 +359,8 @@ public class DataStreamToSQL {
                 jdbcDriverName = "oracle.jdbc.driver.OracleDriver";
                 jdbcDriverConnectionString =
                         String.format(
-                                "jdbc:oracle:thin:@%s:%s/%s",
-                                options.getDatabaseHost(), options.getDatabasePort(), options.getDatabaseName());
+                                "jdbc:oracle:thin:@%s",
+                                options.getDatabaseHost());
                 break;
             default:
                 throw new IllegalArgumentException(
