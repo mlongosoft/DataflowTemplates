@@ -486,7 +486,8 @@ public class DataStreamToSQL {
             .withStatementFormatter(
                 new CdcJdbcIO.StatementFormatter<KV<String, DmlInfo>>() {
                   public String formatStatement(KV<String, DmlInfo> element) {
-                    LOG.debug("Executing SQL: {}", element.getValue().getDmlSql());
+                      LOG.info("Element key : {}",element.getKey());
+                      LOG.info("Executing SQL: {}", element.getValue().getDmlSql());
                     return element.getValue().getDmlSql();
                   }
                 }));
