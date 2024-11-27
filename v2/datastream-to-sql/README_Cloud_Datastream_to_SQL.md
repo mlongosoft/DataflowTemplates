@@ -1,8 +1,8 @@
-
 Datastream to SQL template
----
-The Datastream to SQL template is a streaming pipeline that reads <a
-href="https://cloud.google.com/datastream/docs">Datastream</a> data and
+--------------------------
+
+The Datastream to SQL template is a streaming pipeline that reads [a
+href="https://cloud.google.com/datastream/docs"](a%0Ahref=%22https://cloud.google.com/datastream/docs%22)Datastream</a> data and
 replicates it into any MySQL or PostgreSQL database. The template reads data from
 Cloud Storage using Pub/Sub notifications and replicates this data into SQL
 replica tables.
@@ -23,7 +23,6 @@ table.
 If no primary keys exist, deletes are ignored.
 If you are using the Oracle to Postgres utilities, add <code>ROWID</code> in SQL
 as the primary key when none exists.
-
 
 :memo: This is a Google-provided template! Please
 check [Provided templates documentation](https://cloud.google.com/dataflow/docs/guides/templates/provided/datastream-to-sql)
@@ -54,8 +53,6 @@ on [Metadata Annotations](https://github.com/GoogleCloudPlatform/DataflowTemplat
 * **databaseName** : The name of the SQL database to connect to. The default value is `postgres`.
 * **schemaMap** : A map of key/values used to dictate schema name changes (ie. old_name:new_name,CaseError:case_error). Defaults to empty.
 * **customConnectionString** : Optional connection string which will be used instead of the default database string.
-
-
 
 ## Getting Started
 
@@ -104,11 +101,20 @@ mvn clean package -PtemplatesStage  \
 -f v2/datastream-to-sql
 ```
 
-
 ```shell
-mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-isa-qa -DbucketName=isa-flex-template  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL 
+  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-isa-qa -DbucketName=isa-flex-template  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL  -Dcheckstyle.skip -Dimage=europe-west1-docker.pkg.dev/groupama-mapo-no-prod/gcf-artifacts/Cloud_Datastream_to_SQL
 ```
 
+
+```shell
+  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-corsaro-nero-noprod -DbucketName=corsaro-nero-flex-template-noprod  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL   -Dcheckstyle.skip
+```
+
+
+
+````shell
+  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-mapo-no-prod -DbucketName=mapo-flex-template-noprod  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west1-docker.pkg.dev/groupama-mapo-no-prod/gcf-artifacts/cloud-datastream-to-sql
+````
 
 The command should build and save the template to Google Cloud, and then print
 the complete location on Cloud Storage:
@@ -121,7 +127,7 @@ The specific path should be copied as it will be used in the following steps.
 
 #### Running the Template
 
-**Using the staged template**:
+**Using 
 
 You can use the path above run the template (or share with others for execution).
 
@@ -184,7 +190,6 @@ gcloud dataflow flex-template run "cloud-datastream-to-sql-job" \
 
 For more information about the command, please check:
 https://cloud.google.com/sdk/gcloud/reference/dataflow/flex-template/run
-
 
 **Using the plugin**:
 

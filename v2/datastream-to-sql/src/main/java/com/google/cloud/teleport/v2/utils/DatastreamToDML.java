@@ -227,7 +227,7 @@ public abstract class DatastreamToDML
               rowObj, catalogName, schemaName, tableName, primaryKeys, tableSchema);
 
       String dmlSql = StringSubstitutor.replace(dmlSqlTemplate, sqlTemplateValues, "{%$", "$%}");
-      LOG.info("DML produced: TABLE: {} | PK: {}",tableName,primaryKeys);
+      LOG.info("DML produced: TABLE: {} | PK: {}",tableName,primaryKeyValues);
       return DmlInfo.of(
           failsafeValue,
           dmlSql,
