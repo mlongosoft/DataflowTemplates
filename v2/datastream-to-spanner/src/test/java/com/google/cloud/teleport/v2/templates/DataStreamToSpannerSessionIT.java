@@ -92,6 +92,7 @@ public class DataStreamToSpannerSessionIT extends DataStreamToSpannerITBase {
                     put("inputFileFormat", "avro");
                   }
                 },
+                null,
                 null);
       }
     }
@@ -160,11 +161,17 @@ public class DataStreamToSpannerSessionIT extends DataStreamToSpannerITBase {
     // Assert Conditions
     assertThatResult(result).meetsConditions();
 
+    // Sleep for cutover time to wait till all CDCs propagate.
+    // A real world customer also has a small cut over time to reach consistency.
+    try {
+      Thread.sleep(CUTOVER_MILLIS);
+    } catch (InterruptedException e) {
+    }
     assertCategoryTableCdcContents();
   }
 
   @Test
-  public void migrationTestWithSyntheticPK() {
+  public void migrationTestWithSyntheticPKAndExtraColumn() {
     // Construct a ChainedConditionCheck with 2 stages.
     // 1. Send initial wave of events
     // 2. Wait on Spanner to have events

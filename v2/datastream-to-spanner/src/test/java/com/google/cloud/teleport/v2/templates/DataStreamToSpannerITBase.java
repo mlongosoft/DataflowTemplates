@@ -47,6 +47,7 @@ public abstract class DataStreamToSpannerITBase extends TemplateTestBase {
   // Format of avro file path in GCS - {table}/2023/12/20/06/57/{fileName}
   public static final String DATA_STREAM_EVENT_FILES_PATH_FORMAT_IN_GCS = "%s/2023/12/20/06/57/%s";
   private static final Logger LOG = LoggerFactory.getLogger(DataStreamToSpannerITBase.class);
+  public static final int CUTOVER_MILLIS = 30 * 1000;
 
   public PubsubResourceManager setUpPubSubResourceManager() throws IOException {
     return PubsubResourceManager.builder(testName, PROJECT, credentialsProvider).build();
@@ -168,7 +169,8 @@ public abstract class DataStreamToSpannerITBase extends TemplateTestBase {
       SpannerResourceManager spannerResourceManager,
       PubsubResourceManager pubsubResourceManager,
       Map<String, String> jobParameters,
-      CustomTransformation customTransformation)
+      CustomTransformation customTransformation,
+      String shardingContextFileResourceName)
       throws IOException {
 
     if (sessionFileResourceName != null) {
@@ -181,6 +183,12 @@ public abstract class DataStreamToSpannerITBase extends TemplateTestBase {
       gcsClient.uploadArtifact(
           gcsPathPrefix + "/transformationContext.json",
           Resources.getResource(transformationContextFileResourceName).getPath());
+    }
+
+    if (shardingContextFileResourceName != null) {
+      gcsClient.uploadArtifact(
+          gcsPathPrefix + "/shardingContext.json",
+          Resources.getResource(shardingContextFileResourceName).getPath());
     }
 
     String gcsPrefix =
@@ -198,10 +206,6 @@ public abstract class DataStreamToSpannerITBase extends TemplateTestBase {
         new HashMap<>() {
           {
             put("inputFilePattern", getGcsPath(gcsPathPrefix + "/cdc/"));
-            put(
-                "streamName",
-                String.format(
-                    "projects/%s/locations/us-central1/streams/test-stream-name", PROJECT));
             put("instanceId", spannerResourceManager.getInstanceId());
             put("databaseId", spannerResourceManager.getDatabaseId());
             put("projectId", PROJECT);
@@ -221,6 +225,10 @@ public abstract class DataStreamToSpannerITBase extends TemplateTestBase {
       params.put(
           "transformationContextFilePath",
           getGcsPath(gcsPathPrefix + "/transformationContext.json"));
+    }
+
+    if (shardingContextFileResourceName != null) {
+      params.put("shardingContextFilePath", getGcsPath(gcsPathPrefix + "/shardingContext.json"));
     }
 
     if (customTransformation != null) {

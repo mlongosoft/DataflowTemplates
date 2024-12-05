@@ -55,6 +55,13 @@ variable "dataflow_params" {
       directory_watch_duration_in_minutes = optional(string)
       spanner_priority                    = optional(string)
       dlq_gcs_pub_sub_subscription        = optional(string)
+      transformation_jar_path             = optional(string)
+      transformation_custom_parameters    = optional(string)
+      transformation_class_name           = optional(string)
+      filtered_events_directory           = optional(string)
+      table_overrides                     = optional(string)
+      column_overrides                    = optional(string)
+      local_schema_overrides_file_path    = optional(string)
     })
     runner_params = object({
       additional_experiments = optional(set(string), [

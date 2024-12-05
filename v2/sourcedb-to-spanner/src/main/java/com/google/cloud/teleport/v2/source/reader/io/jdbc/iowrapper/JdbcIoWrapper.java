@@ -15,10 +15,11 @@
  */
 package com.google.cloud.teleport.v2.source.reader.io.jdbc.iowrapper;
 
+import static com.google.cloud.teleport.v2.source.reader.io.schema.SourceColumnIndexInfo.INDEX_TYPE_TO_CLASS;
+
 import com.google.cloud.teleport.v2.source.reader.io.IoWrapper;
+import com.google.cloud.teleport.v2.source.reader.io.datasource.DataSource;
 import com.google.cloud.teleport.v2.source.reader.io.exception.SuitableIndexNotFoundException;
-import com.google.cloud.teleport.v2.source.reader.io.jdbc.dialectadapter.mysql.MysqlDialectAdapter;
-import com.google.cloud.teleport.v2.source.reader.io.jdbc.dialectadapter.mysql.MysqlDialectAdapter.MySqlVersion;
 import com.google.cloud.teleport.v2.source.reader.io.jdbc.iowrapper.config.JdbcIOWrapperConfig;
 import com.google.cloud.teleport.v2.source.reader.io.jdbc.iowrapper.config.TableConfig;
 import com.google.cloud.teleport.v2.source.reader.io.jdbc.rowmapper.JdbcSourceRowMapper;
@@ -41,14 +42,13 @@ import com.google.common.collect.ImmutableSet;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
-import javax.sql.DataSource;
 import org.apache.beam.sdk.io.jdbc.JdbcIO;
 import org.apache.beam.sdk.io.jdbc.JdbcIO.DataSourceConfiguration;
 import org.apache.beam.sdk.io.jdbc.JdbcIO.ReadWithPartitions;
-import org.apache.beam.sdk.options.ValueProvider.StaticValueProvider;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
+import org.apache.commons.dbcp2.BasicDataSource;
 import org.checkerframework.checker.initialization.qual.Initialized;
 import org.checkerframework.checker.nullness.qual.NonNull;
 import org.checkerframework.checker.nullness.qual.UnknownKeyFor;
@@ -80,17 +80,73 @@ public final class JdbcIoWrapper implements IoWrapper {
   public static JdbcIoWrapper of(JdbcIOWrapperConfig config) throws SuitableIndexNotFoundException {
     DataSourceConfiguration dataSourceConfiguration = getDataSourceConfiguration(config);
 
-    DataSource dataSource = dataSourceConfiguration.buildDatasource();
+    javax.sql.DataSource dataSource = dataSourceConfiguration.buildDatasource();
+    setDataSourceLoginTimeout((BasicDataSource) dataSource, config);
 
     SchemaDiscovery schemaDiscovery =
         new SchemaDiscoveryImpl(config.dialectAdapter(), config.schemaDiscoveryBackOff());
 
     ImmutableList<TableConfig> tableConfigs =
-        autoInferTableConfigs(config, schemaDiscovery, dataSource);
-    SourceSchema sourceSchema = getSourceSchema(config, schemaDiscovery, dataSource, tableConfigs);
+        autoInferTableConfigs(config, schemaDiscovery, DataSource.ofJdbc(dataSource));
+    SourceSchema sourceSchema =
+        getSourceSchema(config, schemaDiscovery, DataSource.ofJdbc(dataSource), tableConfigs);
     ImmutableMap<SourceTableReference, PTransform<PBegin, PCollection<SourceRow>>> tableReaders =
         buildTableReaders(config, tableConfigs, dataSourceConfiguration, sourceSchema);
     return new JdbcIoWrapper(tableReaders, sourceSchema);
+  }
+
+  /**
+   * Set's the login timeout for the DataSource used for schema and index discoveries. This helps in
+   * early error reporting to the customer in case of unreachable or unavailable source database.
+   * The default login timeout for the {@link BasicDataSource} is infinite. Unfortunately, {@link
+   * BasicDataSource} does not directly support {@link DataSource#setLoginTimeout(int)}. This can be
+   * achieved by setting {@link BasicDataSource#setMaxWaitMillis} and connect timeout at the driver
+   * layer.
+   *
+   * @param dataSource
+   * @param config
+   */
+  @VisibleForTesting
+  protected static void setDataSourceLoginTimeout(
+      BasicDataSource dataSource, JdbcIOWrapperConfig config) {
+
+    dataSource.setMaxWaitMillis(config.schemaDiscoveryConnectivityTimeoutMilliSeconds());
+
+    String connectivityTimeout;
+    switch (config.sourceDbDialect()) {
+      case MYSQL:
+        connectivityTimeout =
+            String.valueOf(config.schemaDiscoveryConnectivityTimeoutMilliSeconds());
+        setConnectionProperty(dataSource, "connectTimeout", connectivityTimeout);
+        setConnectionProperty(dataSource, "socketTimeout", connectivityTimeout);
+        break;
+      case POSTGRESQL:
+        connectivityTimeout =
+            String.valueOf(config.schemaDiscoveryConnectivityTimeoutMilliSeconds() / 1000);
+        setConnectionProperty(dataSource, "loginTimeout", connectivityTimeout);
+        setConnectionProperty(dataSource, "connectTimeout", connectivityTimeout);
+        setConnectionProperty(dataSource, "socketTimeout", connectivityTimeout);
+        break;
+      default:
+        logger.error(
+            "No connectivity timeout overrides implemented for dialect {}. In case of misconfigured network connectivity, schema discovery could timeout without correct error reporting.");
+    }
+  }
+
+  private static void setConnectionProperty(
+      BasicDataSource dataSource, String property, String value) {
+
+    String url = dataSource.getUrl();
+    if (!url.contains(property)) {
+      dataSource.addConnectionProperty(property, value);
+      logger.info("Set {} = {}  for schema discovery of {}", property, value, dataSource);
+    } else {
+      logger.warn(
+          "Property {} already set in URL {}. Not overriding with {} for schema discovery. The default over-ride helps in failing fast in case of misconfigured network connectivity.",
+          property,
+          url,
+          value);
+    }
   }
 
   /**
@@ -128,7 +184,7 @@ public final class JdbcIoWrapper implements IoWrapper {
               return Map.entry(
                   SourceTableReference.builder()
                       .setSourceSchemaReference(sourceSchema.schemaReference())
-                      .setSourceTableName(sourceTableSchema.tableName())
+                      .setSourceTableName(delimitIdentifier(sourceTableSchema.tableName()))
                       .setSourceTableSchemaUUID(sourceTableSchema.tableSchemaUUID())
                       .build(),
                   (config.readWithUniformPartitionsFeatureEnabled())
@@ -172,7 +228,8 @@ public final class JdbcIoWrapper implements IoWrapper {
         .map(
             tableEntry -> {
               SourceTableSchema.Builder sourceTableSchemaBuilder =
-                  SourceTableSchema.builder().setTableName(tableEntry.getKey());
+                  SourceTableSchema.builder(config.sourceDbDialect())
+                      .setTableName(tableEntry.getKey());
               tableEntry
                   .getValue()
                   .entrySet()
@@ -202,6 +259,10 @@ public final class JdbcIoWrapper implements IoWrapper {
     ImmutableList<String> discoveredTables =
         schemaDiscovery.discoverTables(dataSource, config.sourceSchemaReference());
     ImmutableList<String> tables = getTablesToMigrate(config.tables(), discoveredTables);
+    if (tables.isEmpty()) {
+      logger.info("source does not contain matching tables: {}", config.tables());
+      return ImmutableList.of();
+    }
     ImmutableMap<String, ImmutableList<SourceColumnIndexInfo>> indexes =
         schemaDiscovery.discoverTableIndexes(dataSource, config.sourceSchemaReference(), tables);
     ImmutableList.Builder<TableConfig> tableConfigsBuilder = ImmutableList.builder();
@@ -245,7 +306,7 @@ public final class JdbcIoWrapper implements IoWrapper {
             .forEach(tableConfigBuilder::withPartitionColum);
       } else {
         ImmutableSet<IndexType> supportedIndexTypes =
-            ImmutableSet.of(IndexType.NUMERIC, IndexType.STRING);
+            ImmutableSet.of(IndexType.NUMERIC, IndexType.STRING, IndexType.BIG_INT_UNSIGNED);
         // As of now only Primary key index with Numeric type is supported.
         // TODO:
         //    1. support non-primary unique indexes.
@@ -276,11 +337,34 @@ public final class JdbcIoWrapper implements IoWrapper {
     }
   }
 
+  @VisibleForTesting
+  protected static java.lang.Class indexTypeToColumnClass(SourceColumnIndexInfo indexInfo)
+      throws SuitableIndexNotFoundException {
+    if (INDEX_TYPE_TO_CLASS.containsKey(indexInfo.indexType())) {
+      return INDEX_TYPE_TO_CLASS.get(indexInfo.indexType());
+    } else {
+      throw new SuitableIndexNotFoundException(
+          new Throwable("No class Mapping for IndexType " + indexInfo));
+    }
+  }
+
+  /**
+   * Delimit the Identifiers as per <a
+   * href=https://github.com/ronsavage/SQL/blob/master/sql-99.bnf>sql-99</a>. This is needed to
+   * handle cases where the user might use reserved keywords as column or table names.
+   *
+   * @param identifier
+   * @return
+   */
+  @VisibleForTesting
+  protected static String delimitIdentifier(String identifier) {
+    return "\"" + identifier.replaceAll("\"", "\"\"") + "\"";
+  }
+
   private static PartitionColumn partitionColumnFromIndexInfo(SourceColumnIndexInfo idxInfo) {
     return PartitionColumn.builder()
-        .setColumnName(idxInfo.columnName())
-        // TODO(vardhanvthigle): handle other types
-        .setColumnClass((idxInfo.indexType() == IndexType.NUMERIC) ? Long.class : String.class)
+        .setColumnName(delimitIdentifier(idxInfo.columnName()))
+        .setColumnClass(indexTypeToColumnClass(idxInfo))
         .setStringCollation(idxInfo.collationReference())
         .setStringMaxLength(idxInfo.stringMaxLength())
         .build();
@@ -332,6 +416,9 @@ public final class JdbcIoWrapper implements IoWrapper {
     if (tableConfig.maxPartitions() != null) {
       jdbcIO = jdbcIO.withNumPartitions(tableConfig.maxPartitions());
     }
+    if (config.maxFetchSize() != null) {
+      jdbcIO = jdbcIO.withFetchSize(config.maxFetchSize());
+    }
     return jdbcIO;
   }
 
@@ -357,8 +444,9 @@ public final class JdbcIoWrapper implements IoWrapper {
             .setTableName(tableConfig.tableName())
             .setPartitionColumns(tableConfig.partitionColumns())
             .setDataSourceProviderFn(JdbcIO.PoolableDataSourceProvider.of(dataSourceConfiguration))
-            .setDbAdapter(new MysqlDialectAdapter(MySqlVersion.DEFAULT))
+            .setDbAdapter(config.dialectAdapter())
             .setApproxTotalRowCount(tableConfig.approxRowCount())
+            .setFetchSize(config.maxFetchSize())
             .setRowMapper(
                 new JdbcSourceRowMapper(
                     config.valueMappingsProvider(),
@@ -379,7 +467,9 @@ public final class JdbcIoWrapper implements IoWrapper {
       readWithUniformPartitionsBuilder =
           readWithUniformPartitionsBuilder.setMaxPartitionsHint((long) tableConfig.maxPartitions());
     }
-    return readWithUniformPartitionsBuilder.build();
+    ReadWithUniformPartitions readWithUniformPartitions = readWithUniformPartitionsBuilder.build();
+    LOG.info("Configured ReadWithUniformPartitions {} for {}", readWithUniformPartitions, config);
+    return readWithUniformPartitions;
   }
 
   /**
@@ -389,28 +479,8 @@ public final class JdbcIoWrapper implements IoWrapper {
    * @return {@link DataSourceConfiguration}
    */
   private static DataSourceConfiguration getDataSourceConfiguration(JdbcIOWrapperConfig config) {
-
     DataSourceConfiguration dataSourceConfig =
-        JdbcIO.DataSourceConfiguration.create(
-                StaticValueProvider.of(config.jdbcDriverClassName()),
-                StaticValueProvider.of(config.sourceDbURL()))
-            .withMaxConnections(Math.toIntExact(config.maxConnections()));
-
-    if (!config.sqlInitSeq().isEmpty()) {
-      dataSourceConfig = dataSourceConfig.withConnectionInitSqls(config.sqlInitSeq());
-    }
-
-    if (config.jdbcDriverJars() != null && !config.jdbcDriverJars().isEmpty()) {
-      dataSourceConfig = dataSourceConfig.withDriverJars(config.jdbcDriverJars());
-    }
-    if (!config.dbAuth().getUserName().get().isBlank()) {
-      dataSourceConfig = dataSourceConfig.withUsername(config.dbAuth().getUserName().get());
-    }
-    if (!config.dbAuth().getPassword().get().isBlank()) {
-      dataSourceConfig = dataSourceConfig.withPassword(config.dbAuth().getPassword().get());
-    }
-
-    LOG.info("Final DatasourceConfiguration: {}", dataSourceConfig);
+        DataSourceConfiguration.create(new JdbcDataSource(config));
     return dataSourceConfig;
   }
 

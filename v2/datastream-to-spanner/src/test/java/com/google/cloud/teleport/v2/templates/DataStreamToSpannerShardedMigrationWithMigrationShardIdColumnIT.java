@@ -104,7 +104,7 @@ public class DataStreamToSpannerShardedMigrationWithMigrationShardIdColumnIT
       createAndUploadJarToGcs("shard1");
       CustomTransformation customTransformation =
           CustomTransformation.builder(
-                  "customTransformation.jar", "com.custom.CustomTransformationWithShardForIT")
+                  "customTransformation.jar", "com.custom.CustomTransformationWithShardForLiveIT")
               .build();
       if (jobInfo1 == null) {
         jobInfo1 =
@@ -120,7 +120,8 @@ public class DataStreamToSpannerShardedMigrationWithMigrationShardIdColumnIT
                     put("inputFileFormat", "avro");
                   }
                 },
-                customTransformation);
+                customTransformation,
+                null);
       }
       if (jobInfo2 == null) {
         jobInfo2 =
@@ -136,6 +137,7 @@ public class DataStreamToSpannerShardedMigrationWithMigrationShardIdColumnIT
                     put("inputFileFormat", "avro");
                   }
                 },
+                null,
                 null);
       }
     }
@@ -201,8 +203,7 @@ public class DataStreamToSpannerShardedMigrationWithMigrationShardIdColumnIT
     PipelineOperator.Result result =
         pipelineOperator()
             .waitForCondition(createConfig(jobInfo1, Duration.ofMinutes(8)), conditionCheck);
-
-    // Assert Conditions
+    // Assert Conditions to check if uploads are successful (not row contents)
     assertThatResult(result).meetsConditions();
 
     conditionCheck =
@@ -244,6 +245,14 @@ public class DataStreamToSpannerShardedMigrationWithMigrationShardIdColumnIT
         pipelineOperator()
             .waitForCondition(createConfig(jobInfo2, Duration.ofMinutes(10)), rowsConditionCheck);
     assertThatResult(result).meetsConditions();
+
+    // Sleep for cutover time to wait till all CDCs propagate.
+    // This will reduce the chance of flakiness.
+    // A real world customer also has a small cut over time to reach consistency.
+    try {
+      Thread.sleep(CUTOVER_MILLIS);
+    } catch (InterruptedException e) {
+    }
 
     // Assert specific rows
     assertUsersTableContents();

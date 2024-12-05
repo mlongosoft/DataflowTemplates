@@ -15,28 +15,37 @@
  */
 package com.google.cloud.teleport.v2.source.reader.io.jdbc.rowmapper;
 
+import static com.google.cloud.teleport.v2.source.reader.io.CustomAsserts.assertColumnEquals;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
-import com.google.auto.value.AutoValue;
 import com.google.cloud.teleport.v2.source.reader.io.exception.ValueMappingException;
 import com.google.cloud.teleport.v2.source.reader.io.jdbc.rowmapper.provider.MysqlJdbcValueMappings;
+import com.google.cloud.teleport.v2.source.reader.io.jdbc.rowmapper.provider.PostgreSQLJdbcValueMappings;
 import com.google.cloud.teleport.v2.source.reader.io.row.SourceRow;
 import com.google.cloud.teleport.v2.source.reader.io.schema.SchemaTestUtils;
+import com.google.cloud.teleport.v2.source.reader.io.schema.SourceSchemaReference;
 import com.google.cloud.teleport.v2.source.reader.io.schema.SourceTableSchema;
+import com.google.cloud.teleport.v2.source.reader.io.schema.typemapping.UnifiedTypeMapper.MapperType;
 import com.google.cloud.teleport.v2.source.reader.io.schema.typemapping.provider.unified.CustomSchema.DateTime;
+import com.google.cloud.teleport.v2.source.reader.io.schema.typemapping.provider.unified.CustomSchema.TimeStampTz;
 import com.google.cloud.teleport.v2.spanner.migrations.schema.SourceColumnType;
 import com.google.common.collect.ImmutableList;
 import java.nio.ByteBuffer;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.sql.Timestamp;
+import java.util.Locale;
 import java.util.stream.Collectors;
 import org.apache.avro.generic.GenericRecordBuilder;
 import org.junit.After;
@@ -59,6 +68,7 @@ public class JdbcSourceRowMapperTest {
     // and detect the lock faster, we decrease this timeout
     System.setProperty("derby.locks.waitTimeout", "2");
     System.setProperty("derby.stream.error.file", "build/derby.log");
+    Locale.setDefault(Locale.US);
   }
 
   @Before
@@ -68,108 +78,130 @@ public class JdbcSourceRowMapperTest {
     conn = DriverManager.getConnection("jdbc:derby:memory:TestingDB;create=true");
   }
 
+  @After
+  public void exitDerby() throws SQLException {
+    conn.close();
+  }
+
   @Test
-  public void testMapRow() throws SQLException {
-    String testTable = "test_table";
+  public void testMapMSQLRows() throws SQLException {
+    String namespace = "public";
+    String dbName = "db";
+    String table = "mysql_test_table";
+    String shardId = "shard1";
+    JdbcValueMappingsProvider valueMappings = new MysqlJdbcValueMappings();
+    MapperType mapperType = MapperType.MYSQL;
+    ImmutableList<Column> columns = mySQLColumns();
 
-    var testCols = getTestCols();
-    // Setup Test Derby DB.
-    try (var statement = conn.createStatement()) {
-      String createTable =
-          new StringBuffer()
-              .append("create table ")
-              .append(testTable)
-              .append(" ( ")
-              .append(
-                  testCols.stream()
-                      .map(col -> col.colName() + " " + col.colType())
-                      .collect(Collectors.joining(", ")))
-              .append(" )")
-              .toString();
-      statement.executeUpdate(createTable);
+    // Create table
+    createTableFrom(table, columns);
+    for (Column column : columns) {
+      // Insert column with a non-null value followed by a null value
+      populateTable(table, column);
     }
-    String insertQuery =
-        new StringBuffer()
-            .append("INSERT INTO ")
-            .append(testTable)
-            .append(" ( ")
-            .append(testCols.stream().map(Col::colName).collect(Collectors.joining(", ")))
-            .append(" ) ")
-            .append(" values ( ")
-            .append(testCols.stream().map(col -> "?").collect(Collectors.joining(", ")))
-            .append(" )")
-            .toString();
-    long maxNonNullValues = testCols.get(0).values().size();
-    try (var statement = conn.prepareStatement(insertQuery)) {
-      for (int valueIdx = 0; valueIdx < maxNonNullValues; valueIdx++) {
-        for (int colIdx = 0; colIdx < testCols.size(); colIdx++) {
-          statement.setObject(colIdx + 1, testCols.get(colIdx).values().get(valueIdx));
-        }
-        statement.executeUpdate();
-      }
-      // Add a null value for each column.
-      for (int colIdx = 0; colIdx < testCols.size(); colIdx++) {
-        statement.setObject(colIdx + 1, null);
-      }
-      statement.executeUpdate();
-      conn.commit();
-    }
-
-    // Build SourceRowMapper.
-    var sourceTableSchemaBuilder = SourceTableSchema.builder().setTableName(testTable);
-    testCols.stream()
-        .forEach(
-            col ->
-                sourceTableSchemaBuilder.addSourceColumnNameToSourceColumnType(
-                    col.colName(), col.sourceColumnType()));
-
-    var sourceSchemaRef = SchemaTestUtils.generateSchemaReference("public", "mydb");
+    SourceTableSchema sourceTableSchema = sourceTableSchemaFrom(table, mapperType, columns);
+    SourceSchemaReference schemaReference =
+        SchemaTestUtils.generateSchemaReference(namespace, dbName);
     JdbcSourceRowMapper mapper =
-        new JdbcSourceRowMapper(
-            new MysqlJdbcValueMappings(),
-            sourceSchemaRef,
-            sourceTableSchemaBuilder.build(),
-            "shard1");
+        new JdbcSourceRowMapper(valueMappings, schemaReference, sourceTableSchema, shardId);
 
-    // Read Test Database and verify mapper.
-    try (var statement = conn.createStatement()) {
-      var rs = statement.executeQuery("SELECT * FROM " + testTable);
-      int valueIdx = -1;
+    // Assert rows match column values
+    try (Statement statement = conn.createStatement()) {
+      ResultSet rs = statement.executeQuery("SELECT * FROM " + table);
+      int i = 0;
       while (rs.next()) {
-        valueIdx++;
-        var sourceRow = mapper.mapRow(rs);
-        assertEquals(sourceSchemaRef, sourceRow.sourceSchemaReference());
-        assertEquals(testTable, sourceRow.tableName());
-        assertEquals("shard1", sourceRow.shardId());
-        for (int colIdx = 0; colIdx < testCols.size(); colIdx++) {
-          if (valueIdx < maxNonNullValues) {
-            assertEquals(
-                "Failed for col: " + testCols.get(colIdx).colName() + " for valueIdx: " + valueIdx,
-                testCols.get(colIdx).expectedFields().get(valueIdx),
-                sourceRow.getPayload().get(colIdx));
-          } else {
-            assertThat(sourceRow.getPayload().get(colIdx)).isNull();
-          }
-        }
+        Column expectedColumn = columns.get(i);
+
+        // Non-null value
+        SourceRow sourceRow = mapper.mapRow(rs);
+
+        assertNotNull(sourceRow);
+        assertEquals(schemaReference, sourceRow.sourceSchemaReference());
+        assertEquals(table, sourceRow.tableName());
+        assertEquals(shardId, sourceRow.shardId());
+        assertColumnEquals(
+            "Failed for column: " + expectedColumn.name + " for value index: " + i,
+            expectedColumn.mappedValue,
+            sourceRow.getPayload().get(i));
+
+        // Null value
+        rs.next();
+        sourceRow = mapper.mapRow(rs);
+
+        assertNotNull(sourceRow);
+        assertNull(sourceRow.getPayload().get(i));
+
+        i++;
       }
-    } catch (Exception e) {
-      throw new RuntimeException(e);
+    }
+  }
+
+  @Test
+  public void testMapPostgreSQLRows() throws SQLException {
+    String namespace = "public";
+    String dbName = "db";
+    String table = "pg_test_table";
+    String shardId = "shard1";
+    JdbcValueMappingsProvider valueMappings = new PostgreSQLJdbcValueMappings();
+    MapperType mapperType = MapperType.POSTGRESQL;
+    ImmutableList<Column> columns = postgreSQLColumns();
+
+    // Create table
+    createTableFrom(table, columns);
+    for (Column column : columns) {
+      // Insert column with a non-null value followed by a null value
+      populateTable(table, column);
+    }
+    SourceTableSchema sourceTableSchema = sourceTableSchemaFrom(table, mapperType, columns);
+    SourceSchemaReference schemaReference =
+        SchemaTestUtils.generateSchemaReference(namespace, dbName);
+    JdbcSourceRowMapper mapper =
+        new JdbcSourceRowMapper(valueMappings, schemaReference, sourceTableSchema, shardId);
+
+    // Assert rows match column values
+    try (Statement statement = conn.createStatement()) {
+      ResultSet rs = statement.executeQuery("SELECT * FROM " + table);
+      int i = 0;
+      while (rs.next()) {
+        Column expectedColumn = columns.get(i);
+
+        // Non-null value
+        SourceRow sourceRow = mapper.mapRow(rs);
+
+        assertNotNull(sourceRow);
+        assertEquals(schemaReference, sourceRow.sourceSchemaReference());
+        assertEquals(table, sourceRow.tableName());
+        assertEquals(shardId, sourceRow.shardId());
+
+        assertColumnEquals(
+            "Failed for column: " + expectedColumn.name + " for value index: " + i,
+            expectedColumn.mappedValue,
+            sourceRow.getPayload().get(i));
+
+        // Null value
+        rs.next();
+        sourceRow = mapper.mapRow(rs);
+
+        assertNotNull(sourceRow);
+        assertNull(sourceRow.getPayload().get(i));
+
+        i++;
+      }
     }
   }
 
   // Add test case for shard id
   @Test
   public void testMapRowException() {
-
     String testTable = "test_table";
 
-    var testCols = getTestCols();
-    var sourceTableSchemaBuilder = SourceTableSchema.builder().setTableName(testTable);
-    testCols.stream()
-        .forEach(
-            col ->
-                sourceTableSchemaBuilder.addSourceColumnNameToSourceColumnType(
-                    col.colName(), col.sourceColumnType()));
+    var testCols = mySQLColumns();
+    var sourceTableSchemaBuilder =
+        SourceTableSchema.builder(MapperType.MYSQL).setTableName(testTable);
+    testCols.forEach(
+        column ->
+            sourceTableSchemaBuilder.addSourceColumnNameToSourceColumnType(
+                column.name, column.sourceColumnType));
     var sourceSchemaRef = SchemaTestUtils.generateSchemaReference("public", "mydb");
     JdbcSourceRowMapper mapper =
         new JdbcSourceRowMapper(
@@ -217,7 +249,7 @@ public class JdbcSourceRowMapperTest {
                     }));
 
     var sourceTableSchema =
-        SourceTableSchema.builder()
+        SourceTableSchema.builder(MapperType.MYSQL)
             .setTableName(testTable)
             .addSourceColumnNameToSourceColumnType(
                 "unsupported_col", new SourceColumnType("UNSUPPORTED", new Long[] {}, null))
@@ -229,263 +261,846 @@ public class JdbcSourceRowMapperTest {
     assertThat(mapper.mapRow(mockResultSet).getPayload().get("unsupported_col")).isNull();
   }
 
-  private static ImmutableList<Col> getTestCols() {
+  private static ImmutableList<Column> mySQLColumns() {
     // Unfortunately Derby supports only UTC.
     // TODO (vardhanvthigle): Verify time zone conversion on actual DB.
     java.sql.Timestamp timestamp = Timestamp.valueOf("2024-05-02 18:48:05.123456");
 
-    return ImmutableList.<Col>builder()
+    return ImmutableList.<Column>builder()
         .add(
-            Col.builder(
-                    "big_int_unsigned_col",
-                    "BIGINT" /* Derby does not support unsigned */,
-                    new SourceColumnType("BIGINT UNSIGNED", new Long[] {20L, 0L}, null))
-                .withValue(12345L, ByteBuffer.wrap(new byte[] {(byte) 0x30, (byte) 0x39}))
+            Column.builder()
+                .derbyColumnType("BIGINT")
+                .sourceColumnType("BIGINT UNSIGNED", new Long[] {20L, 0L})
+                .inputValue(12345L)
+                .mappedValue("12345")
                 .build())
         .add(
-            Col.builder(
-                    "big_int_col", "BIGINT", new SourceColumnType("BIGINT", new Long[] {}, null))
-                .withValue(12345L)
+            Column.builder()
+                .derbyColumnType("BIGINT")
+                .sourceColumnType("BIGINT")
+                .mappedValue(12345L)
                 .build())
         .add(
-            Col.builder(
-                    "binary_col",
-                    "CHAR(4) FOR BIT DATA /*Derby mapping for Binary*/",
-                    new SourceColumnType("BINARY", new Long[] {4L}, null))
-                .withValue(
-                    new byte[] {0x65, 0x66},
+            Column.builder()
+                .derbyColumnType("CHAR(4) FOR BIT DATA") // Derby mapping for Binary
+                .sourceColumnType("BINARY", new Long[] {4L})
+                .inputValue(new byte[] {0x65, 0x66})
+                .mappedValue(
                     new String(
                         new char[] {'6', '5', '6', '6', /*space-padding*/ '2', '0', '2', '0'}))
                 .build())
         .add(
-            Col.builder(
-                    "bit_col",
-                    "CHAR(8) FOR BIT DATA /*Derby mapping for Bit*/",
-                    new SourceColumnType("BIT", new Long[] {}, null))
-                .withValue(ByteBuffer.allocate(8).putLong(5L).array(), 5L)
+            Column.builder()
+                .derbyColumnType("CHAR(8) FOR BIT DATA") // Derby mapping for Bit
+                .sourceColumnType("BIT")
+                .inputValue(ByteBuffer.allocate(8).putLong(5L).array())
+                .mappedValue(5L)
                 .build())
         .add(
-            Col.builder("blob_col", "BLOB", new SourceColumnType("BLOB", new Long[] {10L}, null))
-                .withValue(new byte[] {0x65, 0x66}, "6566")
+            Column.builder()
+                .derbyColumnType("BLOB")
+                .sourceColumnType("BLOB", new Long[] {10L})
+                .inputValue(new byte[] {0x65, 0x66})
+                .mappedValue("6566")
                 .build())
         .add(
-            Col.builder("bool_col", "BOOLEAN", new SourceColumnType("BOOL", new Long[] {}, null))
-                .withValue(true, 1)
+            Column.builder()
+                .derbyColumnType("BOOLEAN")
+                .sourceColumnType("BOOL", new Long[] {})
+                .inputValue(true)
+                .mappedValue(1)
                 .build())
         .add(
-            Col.builder(
-                    "char_col", "CHAR(10)", new SourceColumnType("CHAR", new Long[] {10L}, null))
-                .withValue("test", "test      ")
+            Column.builder()
+                .derbyColumnType("CHAR(10)")
+                .sourceColumnType("CHAR", new Long[] {10L})
+                .inputValue("test")
+                .mappedValue("test      ")
                 .build())
         .add(
-            Col.builder("date_col", "DATE", new SourceColumnType("DATE", new Long[] {}, null))
-                .withValue(
-                    java.sql.Date.valueOf("2024-05-02"),
-                    java.sql.Date.valueOf("2024-05-02").getTime() * 1000)
+            Column.builder()
+                .derbyColumnType("DATE")
+                .sourceColumnType("DATE")
+                .inputValue(java.sql.Date.valueOf("2024-05-02"))
+                .mappedValue(java.sql.Date.valueOf("2024-05-02").getTime() * 1000)
                 .build())
         .add(
-            Col.builder(
-                    "datetime_col",
-                    "TIMESTAMP" /*Derby mapping for datetime*/,
-                    new SourceColumnType("DATETIME", new Long[] {}, null))
-                .withValue(
-                    timestamp,
+            Column.builder()
+                .derbyColumnType("TIMESTAMP") // Derby mapping for datetime
+                .sourceColumnType("DATETIME")
+                .inputValue(timestamp)
+                .mappedValue(
                     new GenericRecordBuilder(DateTime.SCHEMA)
                         .set(DateTime.DATE_FIELD_NAME, 19845)
                         .set(DateTime.TIME_FIELD_NAME, 67685123456L)
                         .build())
                 .build())
         .add(
-            Col.builder(
-                    "decimal_col",
-                    "DECIMAL(8,2)",
-                    new SourceColumnType("DECIMAL", new Long[] {8L, 2L}, null))
-                .withValue(123456.78, ByteBuffer.allocate(4).putInt(12345678).rewind())
+            Column.builder()
+                .derbyColumnType("DECIMAL(8,2)")
+                .sourceColumnType("DECIMAL", new Long[] {8L, 2L})
+                .inputValue(123456.78)
+                .mappedValue(ByteBuffer.allocate(4).putInt(12345678).rewind())
                 .build())
         .add(
-            Col.builder("double_col", "DOUBLE", new SourceColumnType("DOUBLE", new Long[] {}, null))
-                .withValue(678.12)
+            Column.builder()
+                .derbyColumnType("DOUBLE")
+                .sourceColumnType("DOUBLE")
+                .mappedValue(678.12)
                 .build())
         .add(
-            Col.builder(
-                    "enum_col",
-                    "VARCHAR(20)" /* Derby does not support enum */,
-                    new SourceColumnType("ENUM", new Long[] {}, null))
-                .withValue("Books")
+            Column.builder()
+                .derbyColumnType("VARCHAR(20)") // Derby does not support enum
+                .sourceColumnType("ENUM")
+                .mappedValue("Books")
                 .build())
         .add(
-            Col.builder("float_col", "FLOAT", new SourceColumnType("FLOAT", new Long[] {}, null))
-                .withValue(145.67f)
+            Column.builder()
+                .derbyColumnType("FLOAT")
+                .sourceColumnType("FLOAT")
+                .mappedValue(145.67f)
                 .build())
         .add(
-            Col.builder(
-                    "integer_col", "INTEGER", new SourceColumnType("INTEGER", new Long[] {}, null))
-                .withValue(42)
+            Column.builder()
+                .derbyColumnType("INTEGER")
+                .sourceColumnType("INTEGER")
+                .mappedValue(42)
                 .build())
         .add(
-            Col.builder(
-                    "unsigned_integer_col",
-                    "INTEGER" /* Derby does not support unsigned */,
-                    new SourceColumnType("INTEGER UNSIGNED", new Long[] {}, null))
-                .withValue(2_147_483_647, 2_147_483_647L)
+            Column.builder()
+                .derbyColumnType("INTEGER") // Derby does not support unsigned
+                .sourceColumnType("INTEGER UNSIGNED")
+                .inputValue(2_147_483_647)
+                .mappedValue(2_147_483_647L)
                 .build())
         .add(
-            Col.builder(
-                    "json_col",
-                    "VARCHAR(100)" /*derby does not support json*/,
-                    new SourceColumnType("JSON", new Long[] {}, null))
-                .withValue(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)") // Derby does not support json
+                .sourceColumnType("JSON")
+                .mappedValue(
                     "{\"author\": \"Stephen Hawking\", \"title\": \"A Brief History of Time\", \"subject\": \"Physics\"}")
                 .build())
         .add(
-            Col.builder(
-                    "long_blob_col",
-                    "BLOB",
-                    new SourceColumnType("LONGBLOB", new Long[] {10L}, null))
-                .withValue(new byte[] {0x65, 0x66}, "6566")
+            Column.builder()
+                .derbyColumnType("BLOB")
+                .sourceColumnType("LONGBLOB")
+                .inputValue(new byte[] {0x65, 0x66})
+                .mappedValue("6566")
                 .build())
         .add(
-            Col.builder(
-                    "long_text_col",
-                    "VARCHAR(10)",
-                    new SourceColumnType("LONGTEXT", new Long[] {}, null))
-                .withValue("test")
+            Column.builder()
+                .derbyColumnType("VARCHAR(10)")
+                .sourceColumnType("LONGTEXT")
+                .mappedValue("test")
                 .build())
         .add(
-            Col.builder(
-                    "medium_blob_col",
-                    "BLOB",
-                    new SourceColumnType("MEDIUMBLOB", new Long[] {10L}, null))
-                .withValue(new byte[] {0x65, 0x66}, "6566")
+            Column.builder()
+                .derbyColumnType("BLOB")
+                .sourceColumnType("MEDIUMBLOB", new Long[] {10L})
+                .inputValue(new byte[] {0x65, 0x66})
+                .mappedValue("6566")
                 .build())
         .add(
-            Col.builder(
-                    "medium_int_col", "INT", new SourceColumnType("MEDIUMINT", new Long[] {}, null))
-                .withValue(42)
+            Column.builder()
+                .derbyColumnType("INT")
+                .sourceColumnType("MEDIUMINT")
+                .mappedValue(42)
                 .build())
         .add(
-            Col.builder(
-                    "medium_text_col",
-                    "VARCHAR(10)",
-                    new SourceColumnType("MEDIUMTEXT", new Long[] {}, null))
-                .withValue("text")
+            Column.builder()
+                .derbyColumnType("VARCHAR(10)")
+                .sourceColumnType("MEDIUMTEXT")
+                .mappedValue("text")
                 .build())
         .add(
-            Col.builder("set_col", "VARCHAR(10)", new SourceColumnType("SET", new Long[] {}, null))
-                .withValue("New")
+            Column.builder()
+                .derbyColumnType("VARCHAR(10)")
+                .sourceColumnType("SET")
+                .mappedValue("New")
                 .build())
         .add(
-            Col.builder(
-                    "small_int_col", "INT", new SourceColumnType("SMALLINT", new Long[] {}, null))
-                .withValue(42)
+            Column.builder()
+                .derbyColumnType("INT")
+                .sourceColumnType("SMALLINT")
+                .mappedValue(42)
                 .build())
         .add(
-            Col.builder(
-                    "text_col", "VARCHAR(10)", new SourceColumnType("TEXT", new Long[] {}, null))
-                .withValue("test")
+            Column.builder()
+                .derbyColumnType("VARCHAR(10)")
+                .sourceColumnType("TEXT")
+                .mappedValue("test")
                 .build())
         .add(
-            Col.builder("time_col", "TIME", new SourceColumnType("TIME", new Long[] {}, null))
-                .withValue("23:09:02" /* Derby supports only time of the day */, 83342000000L)
+            Column.builder()
+                .derbyColumnType("TIME")
+                .sourceColumnType("TIME")
+                .inputValue("23:09:02") // Derby supports only time of the day */
+                .mappedValue(83342000000L)
                 .build())
         .add(
-            Col.builder(
-                    "timestamp_col",
-                    "TIMESTAMP",
-                    new SourceColumnType("TIMESTAMP", new Long[] {}, null))
-                .withValue(timestamp, 1714675685123456L)
+            Column.builder()
+                .derbyColumnType("TIMESTAMP")
+                .sourceColumnType("TIMESTAMP")
+                .inputValue(timestamp)
+                .mappedValue(1714675685123456L)
                 .build())
         .add(
-            Col.builder(
-                    "tiny_blob_col", "BLOB", new SourceColumnType("TINYBLOB", new Long[] {}, null))
-                .withValue(new byte[] {0x65, 0x66}, "6566")
+            Column.builder()
+                .derbyColumnType("BLOB")
+                .sourceColumnType("TINYBLOB")
+                .inputValue(new byte[] {0x65, 0x66})
+                .mappedValue("6566")
                 .build())
         .add(
-            Col.builder(
-                    "tiny_int_col",
-                    "SMALLINT",
-                    new SourceColumnType("TINYINT", new Long[] {}, null))
-                .withValue(42)
+            Column.builder()
+                .derbyColumnType("SMALLINT")
+                .sourceColumnType("TINYINT")
+                .mappedValue(42)
                 .build())
         .add(
-            Col.builder(
-                    "tiny_text_col",
-                    "VARCHAR(10)",
-                    new SourceColumnType("TINYTEXT", new Long[] {}, null))
-                .withValue("test")
+            Column.builder()
+                .derbyColumnType("VARCHAR(10)")
+                .sourceColumnType("TINYTEXT")
+                .mappedValue("test")
                 .build())
         .add(
-            Col.builder(
-                    "varbinary_col",
-                    "VARCHAR(4) FOR BIT DATA /*Derby mapping for Binary*/",
-                    new SourceColumnType("BINARY", new Long[] {4L}, null))
-                .withValue(new byte[] {0x65, 0x66}, "6566")
+            Column.builder()
+                .name("varbinary_col")
+                .derbyColumnType("VARCHAR(4) FOR BIT DATA") // Derby mapping for Binary
+                .sourceColumnType("BINARY", new Long[] {4L})
+                .inputValue(new byte[] {0x65, 0x66})
+                .mappedValue("6566")
                 .build())
         .add(
-            Col.builder(
-                    "varchar_col",
-                    "VARCHAR(4)",
-                    new SourceColumnType("VARCHAR", new Long[] {4L}, null))
-                .withValue("test")
+            Column.builder()
+                .derbyColumnType("VARCHAR(4)")
+                .sourceColumnType("VARCHAR", new Long[] {4L})
+                .mappedValue("test")
                 .build())
         .add(
-            Col.builder("year_col", "BIGINT", new SourceColumnType("YEAR", new Long[] {}, null))
-                .withValue(2024, 2024)
+            Column.builder()
+                .derbyColumnType("BIGINT")
+                .sourceColumnType("YEAR")
+                .mappedValue(2024)
                 .build())
         .build();
   }
 
-  @After
-  public void exitDerby() throws SQLException {
-    conn.close();
+  private ImmutableList<Column> postgreSQLColumns() {
+    return ImmutableList.<Column>builder()
+        .add(
+            Column.builder()
+                .derbyColumnType("BIGINT")
+                .sourceColumnType("BIGINT")
+                .mappedValue(12345L)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("BIGINT")
+                .sourceColumnType("BIGSERIAL")
+                .mappedValue(1L)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("CHAR(8) FOR BIT DATA")
+                .sourceColumnType("BIT")
+                .mappedValue(ByteBuffer.allocate(8).putLong(Byte.MAX_VALUE).array())
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("CHAR(16) FOR BIT DATA")
+                .sourceColumnType("BIT VARYING")
+                .mappedValue(ByteBuffer.allocate(16).putLong(Short.MAX_VALUE).array())
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("BOOLEAN")
+                .sourceColumnType("BOOL")
+                .mappedValue(false)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("BOOLEAN")
+                .sourceColumnType("BOOLEAN")
+                .mappedValue(true)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("BOX")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("CHAR(64) FOR BIT DATA")
+                .sourceColumnType("BYTEA")
+                .mappedValue(ByteBuffer.allocate(64).putLong(Long.MAX_VALUE).array())
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("CHAR(1)")
+                .sourceColumnType("CHAR")
+                .mappedValue("a")
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("CHAR(1)")
+                .sourceColumnType("CHARACTER")
+                .mappedValue("b")
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("CHARACTER VARYING", new Long[] {100L})
+                .mappedValue("character varying value")
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("CIDR")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("CIRCLE")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("CITEXT")
+                .mappedValue("ci text")
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("DATE")
+                .sourceColumnType("DATE")
+                .inputValue(java.sql.Date.valueOf("2024-08-30"))
+                .mappedValue((int) java.sql.Date.valueOf("2024-08-30").toLocalDate().toEpochDay())
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("DATEMULTIRANGE")
+                .inputValue("{[0001-01-01, 9999-12-31]}")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("DATERANGE")
+                .inputValue("[0001-01-01, 9999-12-31]")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("DECIMAL(9,3)")
+                .sourceColumnType("DECIMAL", new Long[] {9L, 3L})
+                .inputValue(123456.789)
+                .mappedValue("123456.789")
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("DOUBLE")
+                .sourceColumnType("DOUBLE PRECISION")
+                .mappedValue(1.2345D)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("ENUM")
+                .inputValue("ENUM VALUE")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("DOUBLE")
+                .sourceColumnType("FLOAT4")
+                .mappedValue(1.23F)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("DOUBLE")
+                .sourceColumnType("FLOAT8")
+                .mappedValue(1.2345D)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("INET")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("INTEGER")
+                .sourceColumnType("INT")
+                .mappedValue(Integer.MAX_VALUE)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("INTEGER")
+                .sourceColumnType("INTEGER")
+                .mappedValue(Integer.MAX_VALUE)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("INTERVAL")
+                .inputValue("1 hour")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("SMALLINT")
+                .sourceColumnType("INT2")
+                .inputValue(Short.MAX_VALUE)
+                .mappedValue((int) Short.MAX_VALUE)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("INT4MULTIRANGE")
+                .inputValue("{[10, 20]}")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("INT4RANGE")
+                .inputValue("[10, 20]")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("INTEGER")
+                .sourceColumnType("INT4")
+                .mappedValue(Integer.MAX_VALUE)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("INT8MULTIRANGE")
+                .inputValue("{[30, 40]}")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("INT8RANGE")
+                .inputValue("[30, 40]")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("BIGINT")
+                .sourceColumnType("INT8")
+                .mappedValue(Long.MAX_VALUE)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("JSON")
+                .mappedValue("{\"key\":\"value\"}")
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("JSONB")
+                .mappedValue("{\"key\":\"value\"}")
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("LINE")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("LSEG")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("MACADDR")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("MACADDR8")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("MONEY")
+                .inputValue("1.23")
+                .mappedValue(1.23D)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("DECIMAL(9,3)")
+                .sourceColumnType("NUMERIC", new Long[] {9L, 3L})
+                .inputValue(123456.789)
+                .mappedValue("123456.789")
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("NUMMULTIRANGE")
+                .inputValue("{[50, 60]}")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("NUMRANGE")
+                .inputValue("[50, 60]")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("BIGINT")
+                .sourceColumnType("OID")
+                .mappedValue(1000L)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("PATH")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("PG_LSN")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("PG_SNAPSHOT")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("POINT")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("POLYGON")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("DOUBLE")
+                .sourceColumnType("REAL")
+                .mappedValue(1.23F)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("INTEGER")
+                .sourceColumnType("SERIAL")
+                .mappedValue(Integer.MAX_VALUE)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("SMALLINT")
+                .sourceColumnType("SERIAL2")
+                .inputValue(Short.MAX_VALUE)
+                .mappedValue((int) Short.MAX_VALUE)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("INTEGER")
+                .sourceColumnType("SERIAL4")
+                .mappedValue(Integer.MAX_VALUE)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("BIGINT")
+                .sourceColumnType("SERIAL8")
+                .mappedValue(Long.MAX_VALUE)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("SMALLINT")
+                .sourceColumnType("SMALLINT")
+                .inputValue(Short.MAX_VALUE)
+                .mappedValue((int) Short.MAX_VALUE)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("SMALLINT")
+                .sourceColumnType("SMALLSERIAL")
+                .inputValue(Short.MAX_VALUE)
+                .mappedValue((int) Short.MAX_VALUE)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("TEXT", new Long[] {100L})
+                .mappedValue("text value")
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("TIME")
+                .mappedValue(0L)
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("TIME WITHOUT TIME ZONE")
+                .inputValue("01:02:03")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("TIMETZ")
+                .inputValue("01:02:03-05")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("TIMESTAMP")
+                .sourceColumnType("TIMESTAMP")
+                .inputValue(Timestamp.valueOf("1970-01-02 01:02:03.123456"))
+                .mappedValue(90123123456L)
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("TIMESTAMP")
+                .sourceColumnType("TIMESTAMP WITHOUT TIME ZONE")
+                .inputValue(Timestamp.valueOf("1970-01-02 01:02:03"))
+                .mappedValue(90123000000L)
+                .build())
+        .add(
+            Column.builder()
+                .name("timestamptz_hour_offset")
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("TIMESTAMPTZ")
+                .inputValue("1970-01-02 01:02:03.123456-05")
+                .mappedValue(
+                    new GenericRecordBuilder(TimeStampTz.SCHEMA)
+                        .set(TimeStampTz.TIMESTAMP_FIELD_NAME, 108123123456L)
+                        .set(TimeStampTz.OFFSET_FIELD_NAME, -18000000L)
+                        .build())
+                .build())
+        .add(
+            Column.builder()
+                .name("timestamptz_hour_minute_offset")
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("TIMESTAMPTZ")
+                .inputValue("1970-01-02 01:02:03.123456-05:00")
+                .mappedValue(
+                    new GenericRecordBuilder(TimeStampTz.SCHEMA)
+                        .set(TimeStampTz.TIMESTAMP_FIELD_NAME, 108123123456L)
+                        .set(TimeStampTz.OFFSET_FIELD_NAME, -18000000L)
+                        .build())
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("TIMESTAMP WITH TIME ZONE")
+                .inputValue("1970-01-02 01:02:03.12345+01:00")
+                .mappedValue(
+                    new GenericRecordBuilder(TimeStampTz.SCHEMA)
+                        .set(TimeStampTz.TIMESTAMP_FIELD_NAME, 86523123450L)
+                        .set(TimeStampTz.OFFSET_FIELD_NAME, 3600000L)
+                        .build())
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("TSMULTIRANGE")
+                .inputValue("{[1970-01-01 01:00, 1970-01-01 02:00]}")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("TSRANGE")
+                .inputValue("[1970-01-01 01:00, 1970-01-01 02:00]")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("TSTZMULTIRANGE")
+                .inputValue("{[1970-01-01 01:00+10:00, 1970-01-01 02:00+10:00]}")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("TSTZRANGE")
+                .inputValue("[1970-01-01 01:00+10:00, 1970-01-01 02:00+10:00]")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("TSQUERY")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("TSVECTOR")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("TXID_SNAPSHOT")
+                .mappedValue(null) // Unsupported
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("UUID")
+                .mappedValue("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11")
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("CHAR(32) FOR BIT DATA")
+                .sourceColumnType("VARBIT")
+                .mappedValue(ByteBuffer.allocate(32).putLong(Integer.MAX_VALUE).array())
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("VARCHAR", new Long[] {100L})
+                .mappedValue("varchar value")
+                .build())
+        .add(
+            Column.builder()
+                .derbyColumnType("VARCHAR(100)")
+                .sourceColumnType("XML")
+                .mappedValue(null) // Unsupported
+                .build())
+        .build();
+  }
+
+  private void createTableFrom(String table, ImmutableList<Column> columns) throws SQLException {
+    String columnsDdl =
+        columns.stream()
+            .map(c -> c.name + " " + c.derbyColumnType)
+            .collect(Collectors.joining(", "));
+    try (Statement statement = conn.createStatement()) {
+      statement.executeUpdate("CREATE TABLE " + table + " (" + columnsDdl + ")");
+      conn.commit();
+    }
+  }
+
+  private void populateTable(String table, Column column) throws SQLException {
+    String insertQuery = "INSERT INTO " + table + " (" + column.name + ") VALUES (?)";
+    try (PreparedStatement statement = conn.prepareStatement(insertQuery)) {
+      statement.setObject(1, column.inputValue);
+      statement.executeUpdate();
+
+      statement.setObject(1, null);
+      statement.executeUpdate();
+      conn.commit();
+    }
+  }
+
+  private SourceTableSchema sourceTableSchemaFrom(
+      String table, MapperType mapperType, ImmutableList<Column> columns) {
+    SourceTableSchema.Builder builder = SourceTableSchema.builder(mapperType).setTableName(table);
+    columns.forEach(
+        column ->
+            builder.addSourceColumnNameToSourceColumnType(column.name, column.sourceColumnType));
+    return builder.build();
   }
 }
 
-@AutoValue
-abstract class Col {
-  abstract String colName();
+class Column {
 
-  abstract String colType();
+  final String name;
+  final String derbyColumnType;
+  final SourceColumnType sourceColumnType;
+  final Object inputValue;
+  final Object mappedValue;
 
-  abstract SourceColumnType sourceColumnType();
-
-  abstract ImmutableList<Object> values();
-
-  abstract ImmutableList<Object> expectedFields();
-
-  static Builder builder(String columnName, String columnType, SourceColumnType sourceColumnType) {
-    var builder = new AutoValue_Col.Builder();
-    return builder
-        .setColName(columnName)
-        .setColType(columnType)
-        .setSourceColumnType(sourceColumnType);
+  public static Builder builder() {
+    return new Builder();
   }
 
-  @AutoValue.Builder
-  public abstract static class Builder {
+  public Column(
+      String name,
+      String derbyColumnType,
+      SourceColumnType sourceColumnType,
+      Object inputValue,
+      Object mappedValue) {
+    this.name = name;
+    this.derbyColumnType = derbyColumnType;
+    this.sourceColumnType = sourceColumnType;
+    this.inputValue = inputValue;
+    this.mappedValue = mappedValue;
+  }
 
-    abstract Builder setColName(String value);
+  public static class Builder {
 
-    abstract Builder setColType(String value);
+    private String name;
+    private String derbyColumnType;
+    private SourceColumnType sourceColumnType;
+    private Object inputValue;
+    private Object mappedValue;
 
-    abstract Builder setSourceColumnType(SourceColumnType value);
-
-    abstract ImmutableList.Builder<Object> valuesBuilder();
-
-    abstract ImmutableList.Builder<Object> expectedFieldsBuilder();
-
-    public Builder withValue(Object value, Object field) {
-      this.valuesBuilder().add(value);
-      this.expectedFieldsBuilder().add(field);
+    Builder name(String value) {
+      this.name = value;
       return this;
     }
 
-    public Builder withValue(Object value) {
-      this.valuesBuilder().add(value);
-      this.expectedFieldsBuilder().add(value);
+    Builder derbyColumnType(String value) {
+      this.derbyColumnType = value;
       return this;
     }
 
-    public abstract Col build();
+    Builder sourceColumnType(String value) {
+      return sourceColumnType(value, null);
+    }
+
+    Builder sourceColumnType(String type, Long[] mods) {
+      this.sourceColumnType = new SourceColumnType(type, mods, null);
+      return this;
+    }
+
+    Builder inputValue(Object value) {
+      this.inputValue = value;
+      return this;
+    }
+
+    Builder mappedValue(Object value) {
+      this.mappedValue = value;
+      return this;
+    }
+
+    Column build() {
+      if (derbyColumnType == null) {
+        throw new IllegalStateException("Derby column type must be defined for column");
+      }
+      if (sourceColumnType == null) {
+        throw new IllegalStateException("Source column type must be defined for column");
+      }
+      if (name == null) {
+        name = String.join("_", sourceColumnType.getName().toLowerCase().split(" "));
+        name += "_col";
+      }
+      if (inputValue == null) {
+        inputValue = mappedValue;
+      }
+      return new Column(name, derbyColumnType, sourceColumnType, inputValue, mappedValue);
+    }
   }
 }

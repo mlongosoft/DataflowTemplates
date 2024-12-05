@@ -17,6 +17,8 @@
         "password": "pass1",
         "port": "3306",
         "dbName": "",
+        "namespace": "namespace1",
+        "connectionProperties": "useUnicode=yes&characterEncoding=UTF-8&zeroDateTimeBehavior=convertToNull",
         "databases": [
           {
             "dbName": "person1",
@@ -35,7 +37,7 @@
         "host": "1.1.1.2",
         "user": "test1",
         "password": "pass1",
-        "port": "3306",
+        "port": 3306,
         "dbName": "",
         "databases": [
           {

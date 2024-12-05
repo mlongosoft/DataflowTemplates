@@ -21,6 +21,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import com.google.cloud.spanner.Mutation;
+import com.google.cloud.teleport.v2.source.reader.io.jdbc.iowrapper.config.SQLDialect;
 import com.google.cloud.teleport.v2.source.reader.io.row.SourceRow;
 import com.google.cloud.teleport.v2.source.reader.io.schema.SchemaTestUtils;
 import com.google.cloud.teleport.v2.source.reader.io.schema.SourceTableSchema;
@@ -28,6 +29,8 @@ import com.google.cloud.teleport.v2.spanner.ddl.Ddl;
 import com.google.cloud.teleport.v2.templates.RowContext;
 import com.google.cloud.teleport.v2.transforms.DLQWriteTransform.WriteDLQ;
 import com.google.cloud.teleport.v2.values.FailsafeElement;
+import java.util.HashMap;
+import java.util.Map;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.values.PCollection;
@@ -77,7 +80,8 @@ public class DeadLetterQueueTest {
 
   @Test
   public void testCreateGCSDLQ() {
-    DeadLetterQueue dlq = DeadLetterQueue.create("testDir", spannerDdl);
+    DeadLetterQueue dlq =
+        DeadLetterQueue.create("testDir", spannerDdl, new HashMap<>(), SQLDialect.MYSQL);
     assertEquals("testDir", dlq.getDlqDirectory());
 
     assertTrue(dlq.getDlqTransform() instanceof WriteDLQ);
@@ -87,26 +91,29 @@ public class DeadLetterQueueTest {
 
   @Test
   public void testCreateLogDlq() {
-    DeadLetterQueue dlq = DeadLetterQueue.create("LOG", spannerDdl);
+    DeadLetterQueue dlq =
+        DeadLetterQueue.create("LOG", spannerDdl, new HashMap<>(), SQLDialect.POSTGRESQL);
     assertEquals("LOG", dlq.getDlqDirectory());
     assertTrue(dlq.getDlqTransform() instanceof DeadLetterQueue.WriteToLog);
   }
 
   @Test
   public void testCreateIgnoreDlq() {
-    DeadLetterQueue dlq = DeadLetterQueue.create("IGNORE", spannerDdl);
+    DeadLetterQueue dlq =
+        DeadLetterQueue.create("IGNORE", spannerDdl, new HashMap<>(), SQLDialect.MYSQL);
     assertEquals("IGNORE", dlq.getDlqDirectory());
     assertNull(dlq.getDlqTransform());
   }
 
   @Test(expected = RuntimeException.class)
   public void testNoDlqDirectory() {
-    DeadLetterQueue.create(null, spannerDdl).getDlqDirectory();
+    DeadLetterQueue.create(null, spannerDdl, new HashMap<>(), SQLDialect.MYSQL).getDlqDirectory();
   }
 
   @Test
   public void testFilteredRowsToLog() {
-    DeadLetterQueue dlq = DeadLetterQueue.create("LOG", spannerDdl);
+    DeadLetterQueue dlq =
+        DeadLetterQueue.create("LOG", spannerDdl, new HashMap<>(), SQLDialect.MYSQL);
     final String testTable = "srcTable";
     var schemaRef = SchemaTestUtils.generateSchemaReference("public", "mydb");
     SourceTableSchema schema = SchemaTestUtils.generateTestTableSchema(testTable);
@@ -133,7 +140,8 @@ public class DeadLetterQueueTest {
 
   @Test
   public void testFailedRowsToLog() {
-    DeadLetterQueue dlq = DeadLetterQueue.create("LOG", spannerDdl);
+    DeadLetterQueue dlq =
+        DeadLetterQueue.create("LOG", spannerDdl, new HashMap<>(), SQLDialect.POSTGRESQL);
     final String testTable = "srcTable";
     var schemaRef = SchemaTestUtils.generateSchemaReference("public", "mydb");
     SourceTableSchema schema = SchemaTestUtils.generateTestTableSchema(testTable);
@@ -159,12 +167,66 @@ public class DeadLetterQueueTest {
   }
 
   @Test
-  public void testRowContextToDlqElement() {
+  public void testRowContextToDlqElementMysql() {
     final String testTable = "srcTable";
     var schemaRef = SchemaTestUtils.generateSchemaReference("public", "mydb");
     SourceTableSchema schema = SchemaTestUtils.generateTestTableSchema(testTable);
 
-    DeadLetterQueue dlq = DeadLetterQueue.create("testDir", spannerDdl);
+    Map<String, String> srcTableToShardId = Map.of(testTable, "migration_id");
+    DeadLetterQueue dlq =
+        DeadLetterQueue.create("testDir", spannerDdl, srcTableToShardId, SQLDialect.MYSQL);
+
+    RowContext r1 =
+        RowContext.builder()
+            .setRow(
+                SourceRow.builder(schemaRef, schema, null, 12412435345L)
+                    .setField("firstName", "abc")
+                    .setField("lastName", "def")
+                    .setShardId("shard-1")
+                    .build())
+            .setErr(new Exception("test exception"))
+            .build();
+    FailsafeElement<String, String> dlqElement = dlq.rowContextToDlqElement(r1);
+    assertNotNull(dlqElement);
+    assertTrue(dlqElement.getErrorMessage().contains("test exception"));
+    assertTrue(dlqElement.getOriginalPayload().contains("\"_metadata_table\":\"srcTable\""));
+    assertTrue(dlqElement.getOriginalPayload().contains("\"firstName\":\"abc\""));
+    assertTrue(dlqElement.getOriginalPayload().contains("\"lastName\":\"def\""));
+    assertTrue(dlqElement.getOriginalPayload().contains("\"migration_id\":\"shard-1\""));
+    assertTrue(dlqElement.getOriginalPayload().contains("\"_metadata_source_type\":\"mysql\""));
+    assertTrue(
+        dlqElement.getOriginalPayload().contains("\"_metadata_change_type\":\"UPDATE-INSERT\""));
+  }
+
+  @Test
+  public void testRowContextToDlqElementMissingShardIdColumn() {
+    var schemaRef = SchemaTestUtils.generateSchemaReference("public", "mydb");
+    SourceTableSchema schema = SchemaTestUtils.generateTestTableSchema("nonExistentTable");
+    DeadLetterQueue dlq =
+        DeadLetterQueue.create("testDir", spannerDdl, new HashMap<>(), SQLDialect.MYSQL);
+
+    RowContext r1 =
+        RowContext.builder()
+            .setRow(
+                SourceRow.builder(schemaRef, schema, null, 12412435345L)
+                    .setField("firstName", "abc")
+                    .setField("lastName", "def")
+                    .setShardId("shard-1")
+                    .build())
+            .setErr(new Exception("test exception"))
+            .build();
+    FailsafeElement<String, String> dlqElement = dlq.rowContextToDlqElement(r1);
+    assertTrue(dlqElement.getOriginalPayload().contains("\"migration_shard_id\":\"shard-1\""));
+  }
+
+  @Test
+  public void testRowContextToDlqElementPG() {
+    final String testTable = "srcTable";
+    var schemaRef = SchemaTestUtils.generateSchemaReference("public", "mydb");
+    SourceTableSchema schema = SchemaTestUtils.generateTestTableSchema(testTable);
+
+    DeadLetterQueue dlq =
+        DeadLetterQueue.create("testDir", spannerDdl, new HashMap<>(), SQLDialect.POSTGRESQL);
 
     RowContext r1 =
         RowContext.builder()
@@ -181,11 +243,14 @@ public class DeadLetterQueueTest {
     assertTrue(dlqElement.getOriginalPayload().contains("\"_metadata_table\":\"srcTable\""));
     assertTrue(dlqElement.getOriginalPayload().contains("\"firstName\":\"abc\""));
     assertTrue(dlqElement.getOriginalPayload().contains("\"lastName\":\"def\""));
+    assertTrue(
+        dlqElement.getOriginalPayload().contains("\"_metadata_source_type\":\"postgresql\""));
   }
 
   @Test
   public void testMutationToDlqElement() {
-    DeadLetterQueue dlq = DeadLetterQueue.create("testDir", spannerDdl);
+    DeadLetterQueue dlq =
+        DeadLetterQueue.create("testDir", spannerDdl, new HashMap<>(), SQLDialect.MYSQL);
     Mutation m =
         Mutation.newInsertOrUpdateBuilder("srcTable")
             .set("firstName")

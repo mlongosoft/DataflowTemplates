@@ -29,9 +29,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import org.apache.curator.shaded.com.google.common.collect.ImmutableList;
 import org.apache.parquet.Strings;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * This mapper uses an SMT session file to map table and column names. For fetching destination data
@@ -39,20 +42,44 @@ import org.apache.parquet.Strings;
  */
 public class SessionBasedMapper implements ISchemaMapper, Serializable {
 
+  private static final Logger LOG = LoggerFactory.getLogger(SessionBasedMapper.class);
+
   private final Ddl ddl;
 
   private final Schema schema;
 
+  /*If enabled, throw error on mismatches between spanner schema and session file. Defaults to false.
+   */
+  private boolean strictCheckSchema = false;
+
   public SessionBasedMapper(String sessionFilePath, Ddl ddl) throws InputMismatchException {
-    this.schema = SessionFileReader.read(sessionFilePath);
-    this.ddl = ddl;
-    validateSchemaAndDdl(schema, ddl);
+    this(sessionFilePath, ddl, false);
+  }
+
+  public SessionBasedMapper(String sessionFilePath, Ddl ddl, boolean strictCheckSchema)
+      throws InputMismatchException {
+    this(SessionFileReader.read(sessionFilePath), ddl, strictCheckSchema);
   }
 
   public SessionBasedMapper(Schema schema, Ddl ddl) throws InputMismatchException {
+    this(schema, ddl, false);
+  }
+
+  public SessionBasedMapper(Schema schema, Ddl ddl, boolean strictCheckSchema)
+      throws InputMismatchException {
     this.schema = schema;
     this.ddl = ddl;
-    validateSchemaAndDdl(schema, ddl);
+    try {
+      validateSchemaAndDdl(schema, ddl);
+      LOG.info("schema matches between session file and spanner");
+    } catch (InputMismatchException e) {
+      if (strictCheckSchema) {
+        LOG.warn("schema does not match between session and spanner: {}", e.getMessage());
+        throw e;
+      } else {
+        LOG.warn("proceeding without schema match between session and spanner");
+      }
+    }
   }
 
   static void validateSchemaAndDdl(Schema schema, Ddl ddl) throws InputMismatchException {
@@ -221,5 +248,55 @@ public class SessionBasedMapper implements ISchemaMapper, Serializable {
         String.format(
             "Found null shard col name for table %s, colId %s, please provide a valid session file.",
             spannerTableName, colId));
+  }
+
+  @Override
+  public String getSyntheticPrimaryKeyColName(String namespace, String spannerTableName) {
+    // Get the table ID mapping or throw if table not found
+    NameAndCols tableMapping =
+        Optional.ofNullable(schema.getSpannerToID().get(spannerTableName))
+            .orElseThrow(
+                () ->
+                    new NoSuchElementException(
+                        String.format("Spanner table '%s' not found", spannerTableName)));
+
+    String tableId =
+        Optional.ofNullable(tableMapping.getName())
+            .orElseThrow(
+                () ->
+                    new NoSuchElementException(
+                        String.format("Invalid table ID for table %s", spannerTableName)));
+
+    // If no synthetic PK exists for this table, return null
+    SyntheticPKey synthPk = schema.getSyntheticPks().get(tableId);
+    if (synthPk == null) {
+      return null;
+    }
+
+    // Get the column definition and return its name
+    SpannerTable table =
+        Optional.ofNullable(schema.getSpSchema().get(tableId))
+            .orElseThrow(
+                () ->
+                    new NoSuchElementException(
+                        String.format("Table %s not found in schema", tableId)));
+
+    return Optional.ofNullable(table.getColDefs())
+        .map(cols -> cols.get(synthPk.getColId()))
+        .map(SpannerColumnDefinition::getName)
+        .orElseThrow(
+            () ->
+                new NoSuchElementException(
+                    String.format("Invalid column definition for table %s", spannerTableName)));
+  }
+
+  @Override
+  public boolean colExistsAtSource(String namespace, String spannerTable, String spannerColumn) {
+    try {
+      getSourceColumnName(namespace, spannerTable, spannerColumn);
+      return true;
+    } catch (NoSuchElementException e) {
+      return false;
+    }
   }
 }

@@ -66,10 +66,12 @@ public class CreateDml
     String driverName = this.targetDataSourceConfiguration.getDriverClassName().get();
     switch (driverName) {
       case "org.postgresql.Driver":
-        datastreamToDML = DatastreamToPostgresDML.of(dataSourceConfiguration);
+        datastreamToDML =
+            DatastreamToPostgresDML.of(dataSourceConfiguration).withSchemaMap(this.schemaMap);
         break;
       case "com.mysql.cj.jdbc.Driver":
-        datastreamToDML = DatastreamToMySQLDML.of(dataSourceConfiguration);
+        datastreamToDML =
+            DatastreamToMySQLDML.of(dataSourceConfiguration).withSchemaMap(this.schemaMap);
         break;
       case "oracle.jdbc.driver.OracleDriver":
         datastreamToDML= DatastreamToOracleDML.of(dataSourceConfiguration);

@@ -18,6 +18,7 @@ package com.google.cloud.teleport.v2.templates;
 import com.google.cloud.teleport.v2.constants.SourceDbToSpannerConstants;
 import com.google.cloud.teleport.v2.options.SourceDbToSpannerOptions;
 import com.google.cloud.teleport.v2.source.reader.ReaderImpl;
+import com.google.cloud.teleport.v2.source.reader.io.jdbc.iowrapper.config.SQLDialect;
 import com.google.cloud.teleport.v2.source.reader.io.row.SourceRow;
 import com.google.cloud.teleport.v2.source.reader.io.transform.ReaderTransform;
 import com.google.cloud.teleport.v2.spanner.ddl.Ddl;
@@ -27,6 +28,7 @@ import com.google.cloud.teleport.v2.transformer.SourceRowToMutationDoFn;
 import com.google.cloud.teleport.v2.writer.DeadLetterQueue;
 import com.google.cloud.teleport.v2.writer.SpannerWriter;
 import java.util.Arrays;
+import java.util.Map;
 import org.apache.beam.repackaged.core.org.apache.commons.lang3.StringUtils;
 import org.apache.beam.sdk.coders.SerializableCoder;
 import org.apache.beam.sdk.io.gcp.spanner.MutationGroup;
@@ -50,6 +52,9 @@ public class MigrateTableTransform extends PTransform<PBegin, PCollection<Void>>
   private ISchemaMapper schemaMapper;
   private ReaderImpl reader;
   private String shardId;
+  private SQLDialect sqlDialect;
+
+  private Map<String, String> srcTableToShardIdColumnMap;
 
   public MigrateTableTransform(
       SourceDbToSpannerOptions options,
@@ -57,13 +62,16 @@ public class MigrateTableTransform extends PTransform<PBegin, PCollection<Void>>
       Ddl ddl,
       ISchemaMapper schemaMapper,
       ReaderImpl reader,
-      String shardId) {
+      String shardId,
+      Map<String, String> srcTableToShardIdColumnMap) {
     this.options = options;
     this.spannerConfig = spannerConfig;
     this.ddl = ddl;
     this.schemaMapper = schemaMapper;
     this.reader = reader;
     this.shardId = StringUtils.isEmpty(shardId) ? "" : shardId;
+    this.sqlDialect = SQLDialect.valueOf(options.getSourceDbDialect());
+    this.srcTableToShardIdColumnMap = srcTableToShardIdColumnMap;
   }
 
   @Override
@@ -106,10 +114,12 @@ public class MigrateTableTransform extends PTransform<PBegin, PCollection<Void>>
     if (!outputDirectory.endsWith("/")) {
       outputDirectory += "/";
     }
+
     // Dump Failed rows to DLQ
-    String dlqDirectory = outputDirectory + "dlq/" + shardId;
+    String dlqDirectory = outputDirectory + "dlq/severe/" + shardId;
     LOG.info("DLQ directory: {}", dlqDirectory);
-    DeadLetterQueue dlq = DeadLetterQueue.create(dlqDirectory, ddl);
+    DeadLetterQueue dlq =
+        DeadLetterQueue.create(dlqDirectory, ddl, srcTableToShardIdColumnMap, sqlDialect);
     dlq.failedMutationsToDLQ(failedMutations);
     dlq.failedTransformsToDLQ(
         transformationResult
@@ -121,12 +131,12 @@ public class MigrateTableTransform extends PTransform<PBegin, PCollection<Void>>
      */
     String filterEventsDirectory = outputDirectory + "filteredEvents/" + shardId;
     LOG.info("Filtered events directory: {}", filterEventsDirectory);
-    DeadLetterQueue filteredEventsQueue = DeadLetterQueue.create(filterEventsDirectory, ddl);
+    DeadLetterQueue filteredEventsQueue =
+        DeadLetterQueue.create(filterEventsDirectory, ddl, srcTableToShardIdColumnMap, sqlDialect);
     filteredEventsQueue.filteredEventsToDLQ(
         transformationResult
             .get(SourceDbToSpannerConstants.FILTERED_EVENT_TAG)
             .setCoder(SerializableCoder.of(RowContext.class)));
-
     return spannerWriteResult.getOutput();
   }
 }

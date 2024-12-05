@@ -38,4 +38,10 @@ public class Constants {
 
   /* The prefix for all metadata keys in the event json */
   public static final String EVENT_METADATA_KEY_PREFIX = "_metadata";
+
+  /* The key for stream name in the event json */
+  public static final String EVENT_STREAM_NAME = "_metadata_stream";
+
+  /* The key for shard id column name in the event json */
+  public static final String SHARD_ID_COLUMN_NAME = "_metadata_shard_id_column_name";
 }

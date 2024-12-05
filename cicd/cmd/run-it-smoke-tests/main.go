@@ -41,7 +41,8 @@ func main() {
 		mvnFlags.SkipTests(),
 		mvnFlags.SkipJacoco(),
 		mvnFlags.SkipShade(),
-		mvnFlags.ThreadCount(8))
+		mvnFlags.ThreadCount(8),
+		mvnFlags.InternalMaven())
 	if err != nil {
 		log.Fatalf("%v\n", err)
 	}
@@ -59,12 +60,12 @@ func main() {
 		mvnFlags.IntegrationTestParallelism(4),
 		mvnFlags.StaticBigtableInstance("teleport"),
 		mvnFlags.StaticSpannerInstance("teleport"),
+		mvnFlags.InternalMaven(),
 		flags.Region(),
 		flags.Project(),
 		flags.ArtifactBucket(),
 		flags.StageBucket(),
 		flags.PrivateConnectivity(),
-		flags.SpannerHost(),
 		flags.FailureMode(),
 		flags.RetryFailures(),
 		flags.StaticOracleHost(),

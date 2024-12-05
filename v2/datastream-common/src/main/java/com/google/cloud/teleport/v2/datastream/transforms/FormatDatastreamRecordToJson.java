@@ -57,7 +57,10 @@ public class FormatDatastreamRecordToJson
   public static class CustomAvroTypes {
     public static final String VARCHAR = "varchar";
     public static final String NUMBER = "number";
+    public static final String TIME_INTERVAL_MICROS = "time-interval-micros";
   }
+
+  static final String LOGICAL_TYPE = "logicalType";
 
   static final Logger LOG = LoggerFactory.getLogger(FormatDatastreamRecordToJson.class);
   static final DateTimeFormatter DEFAULT_DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
@@ -118,6 +121,7 @@ public class FormatDatastreamRecordToJson
     outputObject.put("_metadata_stream", getStreamName(record));
     outputObject.put("_metadata_timestamp", getSourceTimestamp(record));
     outputObject.put("_metadata_read_timestamp", getMetadataTimestamp(record));
+    outputObject.put("_metadata_dataflow_timestamp", getCurrentTimestamp());
     outputObject.put("_metadata_read_method", record.get("read_method").toString());
     outputObject.put("_metadata_source_type", sourceType);
 
@@ -202,6 +206,10 @@ public class FormatDatastreamRecordToJson
   private long getMetadataTimestamp(GenericRecord record) {
     long unixTimestampMilli = (long) record.get("read_timestamp");
     return unixTimestampMilli / 1000;
+  }
+
+  private long getCurrentTimestamp() {
+    return System.currentTimeMillis() / 1000L;
   }
 
   private long getSourceTimestamp(GenericRecord record) {
@@ -356,10 +364,19 @@ public class FormatDatastreamRecordToJson
 
     static void putField(
         String fieldName, Schema fieldSchema, GenericRecord record, ObjectNode jsonObject) {
+      // fieldSchema.getLogicalType() returns object of type org.apache.avro.LogicalType,
+      // therefore, is null for custom logical types
       if (fieldSchema.getLogicalType() != null) {
         // Logical types should be handled separately.
         handleLogicalFieldType(fieldName, fieldSchema, record, jsonObject);
         return;
+      } else if (fieldSchema.getProp(LOGICAL_TYPE) != null) {
+        // Handling for custom logical types.
+        boolean isSupportedCustomType =
+            handleCustomLogicalType(fieldName, fieldSchema, record, jsonObject);
+        if (isSupportedCustomType) {
+          return;
+        }
       }
 
       switch (fieldSchema.getType()) {
@@ -419,6 +436,45 @@ public class FormatDatastreamRecordToJson
       }
     }
 
+    static boolean handleCustomLogicalType(
+        String fieldName, Schema fieldSchema, GenericRecord element, ObjectNode jsonObject) {
+      if (fieldSchema.getProp(LOGICAL_TYPE).equals(CustomAvroTypes.TIME_INTERVAL_MICROS)) {
+        Long timeMicrosTotal = (Long) element.get(fieldName);
+        boolean isNegative = false;
+        if (timeMicrosTotal < 0) {
+          timeMicrosTotal *= -1;
+          isNegative = true;
+        }
+        Long nanoseconds = timeMicrosTotal * TimeUnit.MICROSECONDS.toNanos(1);
+        Long hours = TimeUnit.NANOSECONDS.toHours(nanoseconds);
+        nanoseconds -= TimeUnit.HOURS.toNanos(hours);
+        Long minutes = TimeUnit.NANOSECONDS.toMinutes(nanoseconds);
+        nanoseconds -= TimeUnit.MINUTES.toNanos(minutes);
+        Long seconds = TimeUnit.NANOSECONDS.toSeconds(nanoseconds);
+        nanoseconds -= TimeUnit.SECONDS.toNanos(seconds);
+        Long micros = TimeUnit.NANOSECONDS.toMicros(nanoseconds);
+        // Pad 0 if single digit hour.
+        String timeString =
+            (hours < 10) ? String.format("%02d", hours) : String.format("%d", hours);
+        timeString += String.format(":%02d:%02d", minutes, seconds);
+        if (micros > 0) {
+          timeString += String.format(".%d", micros);
+        }
+        String resultString = isNegative ? "-" + timeString : timeString;
+        jsonObject.put(fieldName, resultString);
+        return true;
+      } else if (fieldSchema.getProp(LOGICAL_TYPE).equals(CustomAvroTypes.NUMBER)) {
+        String number = element.get(fieldName).toString();
+        jsonObject.put(fieldName, number);
+        return true;
+      } else if (fieldSchema.getProp(LOGICAL_TYPE).equals(CustomAvroTypes.VARCHAR)) {
+        String varcharValue = element.get(fieldName).toString();
+        jsonObject.put(fieldName, varcharValue);
+        return true;
+      }
+      return false;
+    }
+
     static void handleLogicalFieldType(
         String fieldName, Schema fieldSchema, GenericRecord element, ObjectNode jsonObject) {
       // TODO(pabloem) Actually test this.
@@ -443,25 +499,19 @@ public class FormatDatastreamRecordToJson
         Duration duration = Duration.ofMillis(((Long) element.get(fieldName)));
         jsonObject.put(fieldName, duration.toString());
       } else if (fieldSchema.getLogicalType() instanceof LogicalTypes.TimestampMicros) {
-        Long nanoseconds = (Long) element.get(fieldName) * TimeUnit.MICROSECONDS.toNanos(1);
-        Instant timestamp =
-            Instant.ofEpochSecond(
-                TimeUnit.NANOSECONDS.toSeconds(nanoseconds),
-                nanoseconds % TimeUnit.SECONDS.toNanos(1));
+        Long microseconds = (Long) element.get(fieldName);
+        Long millis = TimeUnit.MICROSECONDS.toMillis(microseconds);
+        Instant instant = Instant.ofEpochMilli(millis);
+        // adding the microsecond after it was removed in the millisecond conversion
+        instant = instant.plusNanos(microseconds % 1000 * 1000L);
         jsonObject.put(
             fieldName,
-            timestamp.atOffset(ZoneOffset.UTC).format(DEFAULT_TIMESTAMP_WITH_TZ_FORMATTER));
+            instant.atOffset(ZoneOffset.UTC).format(DEFAULT_TIMESTAMP_WITH_TZ_FORMATTER));
       } else if (fieldSchema.getLogicalType() instanceof LogicalTypes.TimestampMillis) {
         Instant timestamp = Instant.ofEpochMilli(((Long) element.get(fieldName)));
         jsonObject.put(
             fieldName,
             timestamp.atOffset(ZoneOffset.UTC).format(DEFAULT_TIMESTAMP_WITH_TZ_FORMATTER));
-      } else if (fieldSchema.getLogicalType().getName().equals(CustomAvroTypes.NUMBER)) {
-        String number = (String) element.get(fieldName);
-        jsonObject.put(fieldName, number);
-      } else if (fieldSchema.getLogicalType().getName().equals(CustomAvroTypes.VARCHAR)) {
-        String varcharValue = (String) element.get(fieldName);
-        jsonObject.put(fieldName, varcharValue);
       } else {
         LOG.error(
             "Unknown field type {} for field {} in {}. Ignoring it.",

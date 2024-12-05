@@ -38,6 +38,8 @@ import com.google.cloud.teleport.v2.templates.constants.DatastreamToSpannerConst
 import com.google.cloud.teleport.v2.templates.datastream.DatastreamConstants;
 import com.google.cloud.teleport.v2.values.FailsafeElement;
 import java.util.Iterator;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import org.apache.beam.runners.dataflow.options.DataflowWorkerHarnessOptions;
 import org.apache.beam.sdk.io.gcp.spanner.SpannerAccessor;
 import org.apache.beam.sdk.io.gcp.spanner.SpannerConfig;
@@ -151,6 +153,8 @@ public class SpannerTransactionWriterDoFnTest {
         new SpannerTransactionWriterDoFn(spannerConfig, ddlView, "shadow", "mysql", true);
     spannerTransactionWriterDoFn.setMapper(mapper);
     spannerTransactionWriterDoFn.setSpannerAccessor(spannerAccessor);
+    spannerTransactionWriterDoFn.setIsInTransaction(new AtomicBoolean(false));
+    spannerTransactionWriterDoFn.setTransactionAttemptCount(new AtomicLong(0));
     spannerTransactionWriterDoFn.processElement(processContextMock);
     ArgumentCaptor<Iterable<Mutation>> argument = ArgumentCaptor.forClass(Iterable.class);
     verify(transactionContext, times(1)).buffer(argument.capture());
@@ -199,7 +203,7 @@ public class SpannerTransactionWriterDoFnTest {
     DoFn.ProcessContext processContextMock = mock(DoFn.ProcessContext.class);
 
     ObjectNode outputObject = mapper.createObjectNode();
-    outputObject.put(DatastreamConstants.EVENT_SOURCE_TYPE_KEY, Constants.MYSQL_SOURCE_TYPE);
+    outputObject.put(DatastreamConstants.EVENT_SOURCE_TYPE_KEY, "random");
     outputObject.put(DatastreamConstants.EVENT_TABLE_NAME_KEY, "Users1");
     outputObject.put("first_name", "Johnny");
     outputObject.put("last_name", "Depp");
@@ -223,7 +227,7 @@ public class SpannerTransactionWriterDoFnTest {
     verify(processContextMock, times(1))
         .output(eq(DatastreamToSpannerConstants.PERMANENT_ERROR_TAG), argument.capture());
     assertEquals(
-        "Table from change event does not exist in Spanner. table=Users1",
+        "Change event with invalid source. Actual(random), Expected(mysql)",
         argument.getValue().getErrorMessage());
   }
 }

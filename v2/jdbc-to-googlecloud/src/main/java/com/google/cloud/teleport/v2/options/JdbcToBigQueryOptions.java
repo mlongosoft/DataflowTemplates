@@ -68,7 +68,7 @@ public interface JdbcToBigQueryOptions
           "The properties string to use for the JDBC connection. The format of the string must "
               + "be `[propertyName=property;]*`."
               + "For more information, see "
-              + "Configuration Properties (https://dev.mysql.com/doc/connector-j/8.1/en/connector-j-reference-configuration-properties.html) "
+              + "Configuration Properties (https://dev.mysql.com/doc/connector-j/en/connector-j-reference-configuration-properties.html) "
               + "in the MySQL documentation.",
       example = "unicode=true;characterEncoding=UTF-8")
   String getConnectionProperties();
@@ -78,10 +78,10 @@ public interface JdbcToBigQueryOptions
   @TemplateParameter.Text(
       order = 5,
       optional = true,
-      regexes = {"^.+$"},
+      regexes = {"(^.+$|projects/.*/secrets/.*/versions/.*)"},
       description = "JDBC connection username.",
       helpText =
-          "The username to use for the JDBC connection. You can pass in this value as a string that's encrypted with a Cloud KMS key and then Base64-encoded. Remove whitespace characters from the Base64-encoded string.")
+          "The username to use for the JDBC connection. Can be passed in as a string that's encrypted with a Cloud KMS key, or can be a Secret Manager secret in the form projects/{project}/secrets/{secret}/versions/{secret_version}.")
   String getUsername();
 
   void setUsername(String username);
@@ -91,7 +91,7 @@ public interface JdbcToBigQueryOptions
       optional = true,
       description = "JDBC connection password.",
       helpText =
-          "The password to use for the JDBC connection. You can pass in this value as a string that's encrypted with a Cloud KMS key and then Base64-encoded. Remove whitespace characters from the Base64-encoded string.")
+          "The password to use for the JDBC connection. Can be passed in as a string that's encrypted with a Cloud KMS key, or can be a Secret Manager secret in the form projects/{project}/secrets/{secret}/versions/{secret_version}.")
   String getPassword();
 
   void setPassword(String password);
@@ -105,7 +105,9 @@ public interface JdbcToBigQueryOptions
           "The query to run on the source to extract the data. Note that some JDBC SQL and BigQuery types, although sharing the same name, have some differences. "
               + "Some important SQL -> BigQuery type mappings to keep in mind are:\n"
               + "DATETIME --> TIMESTAMP\n"
-              + "\nType casting may be required if your schemas do not match.",
+              + "\nType casting may be required if your schemas do not match. "
+              + "This parameter can be set to a gs:// path pointing to a file in Cloud Storage to load the query from. "
+              + "The file encoding should be UTF-8.",
       example = "select * from sampledb.sample_table")
   String getQuery();
 
@@ -254,4 +256,19 @@ public interface JdbcToBigQueryOptions
   String getBigQuerySchemaPath();
 
   void setBigQuerySchemaPath(String path);
+
+  @TemplateParameter.BigQueryTable(
+      order = 21,
+      optional = true,
+      description =
+          "Table for messages that failed to reach the output table (i.e., Deadletter table) when using Storage Write API",
+      helpText =
+          "The BigQuery table to use for messages that failed to reach the output table, "
+              + "formatted as `\"PROJECT_ID:DATASET_NAME.TABLE_NAME\"`. If the table "
+              + "doesn't exist, it is created when the pipeline runs. "
+              + "If this parameter is not specified, the pipeline will fail on write errors."
+              + "This parameter can only be specified if `useStorageWriteApi` or `useStorageWriteApiAtLeastOnce` is set to true.")
+  String getOutputDeadletterTable();
+
+  void setOutputDeadletterTable(String value);
 }

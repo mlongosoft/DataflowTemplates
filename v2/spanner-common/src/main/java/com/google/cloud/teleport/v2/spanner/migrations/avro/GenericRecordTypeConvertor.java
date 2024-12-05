@@ -35,6 +35,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.apache.arrow.util.VisibleForTesting;
 import org.apache.avro.Conversions;
@@ -46,6 +47,7 @@ import org.apache.avro.data.TimeConversions;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.metrics.Distribution;
 import org.apache.beam.sdk.metrics.Metrics;
+import org.apache.kerby.util.Hex;
 import org.joda.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,6 +66,8 @@ public class GenericRecordTypeConvertor {
   private final String shardId;
 
   private final ISpannerMigrationTransformer customTransformer;
+
+  static final String LOGICAL_TYPE = "logicalType";
 
   private static final Schema CUSTOM_TRANSFORMATION_AVRO_SCHEMA =
       new LogicalType("custom_transform").addToSchema(SchemaBuilder.builder().stringType());
@@ -93,21 +97,56 @@ public class GenericRecordTypeConvertor {
   public Map<String, Value> transformChangeEvent(GenericRecord record, String srcTableName)
       throws InvalidTransformationException {
     Map<String, Value> result = new HashMap<>();
+    result = populateCustomTransformations(result, record, srcTableName);
+    // If the row needs to be filtered.
+    if (result == null) {
+      LOG.debug(
+          "Filtered out row based on Customer Transformation response for table {}, record {}",
+          srcTableName,
+          record);
+      return null;
+    }
     String spannerTableName = schemaMapper.getSpannerTableName(namespace, srcTableName);
     List<String> spannerColNames = schemaMapper.getSpannerColumns(namespace, spannerTableName);
     // This is null/blank for identity/non-sharded cases.
     String shardIdCol = schemaMapper.getShardIdColumnName(namespace, spannerTableName);
     for (String spannerColName : spannerColNames) {
-      /**
-       * TODO: Handle columns that will not exist at source - synth id - multi-column
-       * transformations - auto-gen keys - Default columns - generated columns
-       */
       try {
+        // Skip if the column was already populated by custom transformation.
+        if (result.containsKey(spannerColName)) {
+          continue;
+        }
         // If current column is migration shard id, populate value.
         if (spannerColName.equals(shardIdCol)) {
           result = populateShardId(result, shardIdCol);
           continue;
         }
+
+        // For session based mapper, populate synthetic primary key with UUID. For identity mapper,
+        // the schemaMapper returns null.
+        if (spannerColName.equals(
+            schemaMapper.getSyntheticPrimaryKeyColName(namespace, spannerTableName))) {
+          result.put(spannerColName, Value.string(getUUID()));
+          continue;
+        }
+
+        // If a Spanner column does not exist in the source data, there are several possible
+        // explanations:
+        // 1. The column might be an auto-value column in Spanner, such as generated column,
+        // default, auto-gen keys.
+        // 2. Column was supposed to be populated by custom transform, but user error missed this
+        // column during custom transform.
+        // 3. The column might have been accidentally left over in the Spanner column without the
+        // right handling.
+        // In all of these cases, we omit this column from the Spanner mutation and user errors will
+        // fail on Spanner. The writer's Dead Letter Queue (DLQ) is responsible for catching any
+        // misconfigurations  where a required column is missing.
+        if (!(schemaMapper.colExistsAtSource(namespace, spannerTableName, spannerColName)
+            && record.hasField(
+                schemaMapper.getSourceColumnName(namespace, spannerTableName, spannerColName)))) {
+          continue;
+        }
+
         String srcColName =
             schemaMapper.getSourceColumnName(namespace, spannerTableName, spannerColName);
         Type spannerColumnType =
@@ -134,8 +173,11 @@ public class GenericRecordTypeConvertor {
             e);
       }
     }
-    result = populateCustomTransformations(result, record, srcTableName);
     return result;
+  }
+
+  private String getUUID() {
+    return UUID.randomUUID().toString();
   }
 
   /**
@@ -201,8 +243,9 @@ public class GenericRecordTypeConvertor {
       Schema fieldSchema = filterNullSchema(field.schema(), fieldName, fieldValue);
       // Handle logical/record types.
       fieldValue = handleNonPrimitiveAvroTypes(fieldValue, fieldSchema, fieldName);
-      // Standardising the types for custom jar input.
-      if (fieldSchema.getLogicalType() != null || fieldSchema.getType() == Schema.Type.RECORD) {
+      // Standardizing the types for custom jar input.
+      if (fieldSchema.getProp(LOGICAL_TYPE) != null
+          || fieldSchema.getType() == Schema.Type.RECORD) {
         map.put(fieldName, fieldValue);
         continue;
       }
@@ -210,15 +253,20 @@ public class GenericRecordTypeConvertor {
       switch (fieldType) {
         case INT:
         case LONG:
+          fieldValue = Long.valueOf(fieldValue.toString());
+          break;
         case BOOLEAN:
-          fieldValue = (fieldValue == null) ? null : Long.valueOf(fieldValue.toString());
+          fieldValue = Boolean.valueOf(fieldValue.toString());
           break;
         case FLOAT:
         case DOUBLE:
-          fieldValue = (fieldValue == null) ? null : Double.valueOf(fieldValue.toString());
+          fieldValue = Double.valueOf(fieldValue.toString());
+          break;
+        case BYTES:
+          fieldValue = Hex.encode(((ByteBuffer) fieldValue).array());
           break;
         default:
-          fieldValue = (fieldValue == null) ? null : fieldValue.toString();
+          fieldValue = fieldValue.toString();
       }
       map.put(fieldName, fieldValue);
     }
@@ -316,7 +364,7 @@ public class GenericRecordTypeConvertor {
    */
   private Object handleNonPrimitiveAvroTypes(
       Object recordValue, Schema fieldSchema, String recordColName) {
-    if (fieldSchema.getLogicalType() != null) {
+    if (fieldSchema.getLogicalType() != null || fieldSchema.getProp(LOGICAL_TYPE) != null) {
       recordValue = handleLogicalFieldType(recordColName, recordValue, fieldSchema);
     } else if (fieldSchema.getType().equals(Schema.Type.RECORD)) {
       // Get the avro field of type record from the whole record.
@@ -394,17 +442,17 @@ public class GenericRecordTypeConvertor {
     } else if (fieldSchema.getLogicalType() instanceof LogicalTypes.TimestampMillis) {
       Instant timestamp = Instant.ofEpochMilli(Long.valueOf(recordValue.toString()));
       return timestamp.atOffset(ZoneOffset.UTC).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
-    } else if (fieldSchema.getLogicalType() != null
-        && fieldSchema.getLogicalType().getName().equals(CustomAvroTypes.JSON)) {
+    } else if (fieldSchema.getProp(LOGICAL_TYPE) != null
+        && fieldSchema.getProp(LOGICAL_TYPE).equals(CustomAvroTypes.JSON)) {
       return recordValue.toString();
-    } else if (fieldSchema.getLogicalType() != null
-        && fieldSchema.getLogicalType().getName().equals(CustomAvroTypes.NUMBER)) {
+    } else if (fieldSchema.getProp(LOGICAL_TYPE) != null
+        && fieldSchema.getProp(LOGICAL_TYPE).equals(CustomAvroTypes.NUMBER)) {
       return recordValue.toString();
-    } else if (fieldSchema.getLogicalType() != null
-        && fieldSchema.getLogicalType().getName().equals(CustomAvroTypes.VARCHAR)) {
+    } else if (fieldSchema.getProp(LOGICAL_TYPE) != null
+        && fieldSchema.getProp(LOGICAL_TYPE).equals(CustomAvroTypes.VARCHAR)) {
       return recordValue.toString();
-    } else if (fieldSchema.getLogicalType() != null
-        && fieldSchema.getLogicalType().getName().equals(CustomAvroTypes.TIME_INTERVAL)) {
+    } else if (fieldSchema.getProp(LOGICAL_TYPE) != null
+        && fieldSchema.getProp(LOGICAL_TYPE).equals(CustomAvroTypes.TIME_INTERVAL)) {
       Long timeMicrosTotal = Long.valueOf(recordValue.toString());
       boolean isNegative = false;
       if (timeMicrosTotal < 0) {
@@ -426,8 +474,8 @@ public class GenericRecordTypeConvertor {
         timeString += String.format(".%d", micros);
       }
       return isNegative ? "-" + timeString : timeString;
-    } else if (fieldSchema.getLogicalType() != null
-        && fieldSchema.getLogicalType().getName().equals(CustomAvroTypes.UNSUPPORTED)) {
+    } else if (fieldSchema.getProp(LOGICAL_TYPE) != null
+        && fieldSchema.getProp(LOGICAL_TYPE).equals(CustomAvroTypes.UNSUPPORTED)) {
       return null;
     } else {
       LOG.error("Unknown field type {} for field {} in {}.", fieldSchema, fieldName, recordValue);

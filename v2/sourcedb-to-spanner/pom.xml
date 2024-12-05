@@ -29,6 +29,7 @@
   <artifactId>sourcedb-to-spanner</artifactId>
 
   <dependencies>
+
     <dependency>
       <groupId>com.google.cloud.teleport.v2</groupId>
       <artifactId>common</artifactId>
@@ -63,6 +64,18 @@
       <groupId>mysql</groupId>
       <artifactId>mysql-connector-java</artifactId>
       <version>${mysql-connector-java.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <version>${postgresql.version}</version>
+    </dependency>
+
+    <!-- https://mvnrepository.com/artifact/com.datastax.oss/java-driver-core -->
+    <dependency>
+      <groupId>com.datastax.oss</groupId>
+      <artifactId>java-driver-core</artifactId>
+      <version>4.17.0</version>
     </dependency>
 
     <!-- Test Dependencies -->
@@ -117,5 +130,17 @@
       <version>1.0-SNAPSHOT</version>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <groupId>com.google.cloud.teleport.v2</groupId>
+      <artifactId>datastream-to-spanner</artifactId>
+      <version>1.0-SNAPSHOT</version>
+      <scope>compile</scope>
+    </dependency>
+      <dependency>
+        <groupId>com.github.nosan</groupId>
+        <artifactId>embedded-cassandra</artifactId>
+        <version>5.0.0</version>
+        <scope>test</scope>
+      </dependency>
   </dependencies>
 </project>

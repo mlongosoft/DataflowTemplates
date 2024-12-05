@@ -39,17 +39,28 @@ public abstract class Index implements Serializable {
 
   abstract ImmutableList<IndexColumn> indexColumns();
 
+  @Nullable
+  abstract ImmutableList<String> options();
+
   abstract boolean unique();
 
   // restricted for gsql
   abstract boolean nullFiltered();
 
-  // restricted for pg
   @Nullable
   abstract String filter();
 
   @Nullable
   abstract String interleaveIn();
+
+  @Nullable
+  abstract String type();
+
+  @Nullable
+  abstract ImmutableList<String> partitionBy();
+
+  @Nullable
+  abstract ImmutableList<String> orderBy();
 
   public static Builder builder(Dialect dialect) {
     return new AutoValue_Index.Builder().dialect(dialect).nullFiltered(false).unique(false);
@@ -111,7 +122,9 @@ public abstract class Index implements Serializable {
 
   private void prettyPrintGsql(Appendable appendable) throws IOException {
     appendable.append("CREATE");
-    if (unique()) {
+    if (type() != null && (type().equals("SEARCH") || type().equals("VECTOR"))) {
+      appendable.append(" " + type());
+    } else if (unique()) {
       appendable.append(" UNIQUE");
     }
     if (nullFiltered()) {
@@ -140,8 +153,41 @@ public abstract class Index implements Serializable {
       appendable.append(" STORING (").append(storingString).append(")");
     }
 
+    if (partitionBy() != null) {
+      String partitionByString =
+          partitionBy().stream()
+              .map(c -> quoteIdentifier(c, dialect()))
+              .collect(Collectors.joining(","));
+
+      if (!partitionByString.isEmpty()) {
+        appendable.append(" PARTITION BY ").append(partitionByString);
+      }
+    }
+
+    if (orderBy() != null) {
+      String orderByString =
+          orderBy().stream()
+              .map(c -> quoteIdentifier(c, dialect()))
+              .collect(Collectors.joining(","));
+
+      if (!orderByString.isEmpty()) {
+        appendable.append(" ORDER BY ").append(orderByString);
+      }
+    }
+
     if (interleaveIn() != null) {
       appendable.append(", INTERLEAVE IN ").append(quoteIdentifier(interleaveIn(), dialect()));
+    }
+
+    if (!nullFiltered() && filter() != null && !filter().isEmpty()) {
+      appendable.append(" WHERE ").append(filter());
+    }
+
+    if (options() != null) {
+      String optionsString = String.join(",", options());
+      if (!optionsString.isEmpty()) {
+        appendable.append(" OPTIONS (").append(optionsString).append(")");
+      }
     }
   }
 
@@ -190,6 +236,8 @@ public abstract class Index implements Serializable {
       return columnsBuilder();
     }
 
+    abstract Builder options(ImmutableList<String> options);
+
     public abstract Builder unique(boolean unique);
 
     public Builder unique() {
@@ -205,6 +253,12 @@ public abstract class Index implements Serializable {
     public abstract Builder filter(String filter);
 
     public abstract Builder interleaveIn(String interleaveIn);
+
+    public abstract Builder type(String type);
+
+    public abstract Builder partitionBy(ImmutableList<String> keys);
+
+    public abstract Builder orderBy(ImmutableList<String> keys);
 
     abstract Index autoBuild();
 

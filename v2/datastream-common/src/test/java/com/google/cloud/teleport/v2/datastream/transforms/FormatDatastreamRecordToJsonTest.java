@@ -16,14 +16,18 @@
 package com.google.cloud.teleport.v2.datastream.transforms;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.File;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.net.URL;
+import org.apache.avro.LogicalTypes;
+import org.apache.avro.Schema;
 import org.apache.avro.file.DataFileReader;
 import org.apache.avro.generic.GenericDatumReader;
 import org.apache.avro.generic.GenericRecord;
@@ -31,12 +35,15 @@ import org.apache.avro.io.DatumReader;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
+import org.mockito.Mockito;
 
 /** Tests for FormatDatastreamRecordToJson function. These check appropriate Avro-to-Json conv. */
 @RunWith(JUnit4.class)
 public class FormatDatastreamRecordToJsonTest {
 
   private static final String EVENT_UUID_KEY = "_metadata_uuid";
+
+  private static final String EVENT_DATAFLOW_TIMESTAMP_KEY = "_metadata_dataflow_timestamp";
 
   private static final String EXPECTED_FIRST_RECORD =
       "{\"LOCATION_ID\":1000.0,\"STREET_ADDRESS\":\"1297 Via Cola di Rie\","
@@ -121,6 +128,7 @@ public class FormatDatastreamRecordToJsonTest {
     ObjectMapper mapper = new ObjectMapper();
     JsonNode changeEvent = mapper.readTree(jsonData);
     ((ObjectNode) changeEvent).remove(EVENT_UUID_KEY);
+    ((ObjectNode) changeEvent).remove(EVENT_DATAFLOW_TIMESTAMP_KEY);
     assertEquals(EXPECTED_FIRST_RECORD, changeEvent.toString());
     while (dataFileReader.hasNext()) {
       record = dataFileReader.next();
@@ -142,6 +150,7 @@ public class FormatDatastreamRecordToJsonTest {
     ObjectMapper mapper = new ObjectMapper();
     JsonNode changeEvent = mapper.readTree(jsonData);
     ((ObjectNode) changeEvent).remove(EVENT_UUID_KEY);
+    ((ObjectNode) changeEvent).remove(EVENT_DATAFLOW_TIMESTAMP_KEY);
     assertEquals(EXPECTED_MYSQL_PEOPLE, changeEvent.toString());
 
     while (dataFileReader.hasNext()) {
@@ -165,6 +174,7 @@ public class FormatDatastreamRecordToJsonTest {
     ObjectMapper mapper = new ObjectMapper();
     JsonNode changeEvent = mapper.readTree(jsonData);
     ((ObjectNode) changeEvent).remove(EVENT_UUID_KEY);
+    ((ObjectNode) changeEvent).remove(EVENT_DATAFLOW_TIMESTAMP_KEY);
     assertEquals(EXPECTED_NUMERIC_RECORD, changeEvent.toString());
   }
 
@@ -180,5 +190,25 @@ public class FormatDatastreamRecordToJsonTest {
   public void testHashRowId_invalid() {
     assertEquals(-1L, FormatDatastreamRecord.hashRowIdToInt(""));
     assertEquals(-1L, FormatDatastreamRecord.hashRowIdToInt("ABCD"));
+  }
+
+  @Test
+  public void testLogicalType_micros() {
+    String fieldNameNegativeNumber = "logicDate-0001-01-01";
+    String fieldNamePositiveNumber = "logicDate-1981-10-21";
+
+    Schema fieldSchema = Mockito.mock(Schema.class);
+    GenericRecord element = Mockito.mock(GenericRecord.class);
+    Mockito.when(fieldSchema.getLogicalType()).thenReturn(LogicalTypes.timestampMicros());
+    Mockito.when(element.get(fieldNameNegativeNumber)).thenReturn(-62135596800000000L);
+    Mockito.when(element.get(fieldNamePositiveNumber)).thenReturn(375191111000000L);
+    ObjectNode jsonObject = new ObjectNode(new JsonNodeFactory(true));
+
+    FormatDatastreamRecordToJson.UnifiedTypesFormatter.handleLogicalFieldType(
+        fieldNameNegativeNumber, fieldSchema, element, jsonObject);
+    assertTrue(jsonObject.get(fieldNameNegativeNumber).asText().equals("0001-01-01T00:00:00Z"));
+    FormatDatastreamRecordToJson.UnifiedTypesFormatter.handleLogicalFieldType(
+        fieldNamePositiveNumber, fieldSchema, element, jsonObject);
+    assertTrue(jsonObject.get(fieldNamePositiveNumber).asText().equals("1981-11-21T11:45:11Z"));
   }
 }

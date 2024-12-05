@@ -16,6 +16,7 @@
 package com.google.cloud.teleport.v2.spanner.migrations.schema;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
@@ -324,17 +325,52 @@ public class SessionBasedMapperTest {
     assertEquals(2, sourceTablesToMigrate.size());
   }
 
+  @Test
+  public void testIgnoreStrictCheck() {
+    // Expected to fail as spanner tables mentioned in session file do not exist
+    SessionBasedMapper emptymapper =
+        new SessionBasedMapper(
+            Paths.get(Resources.getResource("session-file-empty.json").getPath()).toString(),
+            ddl,
+            false);
+    List<String> sourceTablesToMigrate = emptymapper.getSourceTablesToMigrate("");
+    assertTrue(sourceTablesToMigrate.isEmpty());
+  }
+
   @Test(expected = InputMismatchException.class)
   public void testSourceTablesToMigrateEmpty() {
     // Expected to fail as spanner tables mentioned in session file do not exist
     SessionBasedMapper emptymapper =
         new SessionBasedMapper(
-            Paths.get(Resources.getResource("session-file-empty.json").getPath()).toString(), ddl);
+            Paths.get(Resources.getResource("session-file-empty.json").getPath()).toString(),
+            ddl,
+            true);
     List<String> sourceTablesToMigrate = emptymapper.getSourceTablesToMigrate("");
   }
 
   @Test(expected = UnsupportedOperationException.class)
   public void testSourceTablesToMigrateNamespace() {
     mapper.getSourceTablesToMigrate("test");
+  }
+
+  @Test
+  public void testGetSyntheticPrimaryKeyColName() {
+    // Table with synthetic PK
+    String result = mapper.getSyntheticPrimaryKeyColName("", "new_people");
+    assertEquals("synth_id", result);
+
+    // Table without synthetic PK
+    assertNull(mapper.getSyntheticPrimaryKeyColName("", "new_cart"));
+  }
+
+  @Test(expected = NoSuchElementException.class)
+  public void testGetSyntheticPrimaryKeyColNameMissingTable() {
+    mapper.getSyntheticPrimaryKeyColName("", "nonexistent_table");
+  }
+
+  @Test
+  public void testColExistsAtSource() {
+    assertTrue(mapper.colExistsAtSource("", "new_cart", "new_quantity"));
+    assertFalse(mapper.colExistsAtSource("", "new_cart", "abc"));
   }
 }

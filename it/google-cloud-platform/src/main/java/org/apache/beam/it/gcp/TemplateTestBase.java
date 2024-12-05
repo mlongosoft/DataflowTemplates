@@ -90,11 +90,13 @@ public abstract class TemplateTestBase {
   public TestRule watcher =
       new TestWatcher() {
         protected void starting(Description description) {
-          LOG.info(
-              "Starting integration test {}.{}",
-              description.getClassName(),
-              description.getMethodName());
           testName = description.getMethodName();
+          // In case of parameterization the testName can contain subscript like testName[paramName]
+          // Converting testName from testName[paramName] to testNameParamName since it is used to
+          // create many resources and it cannot contain special characters.
+          testName = testName.replaceAll("\\[", "");
+          testName = testName.replaceAll("\\]", "");
+          LOG.info("Starting integration test {}.{}", description.getClassName(), testName);
         }
       };
 
@@ -393,7 +395,7 @@ public abstract class TemplateTestBase {
       "-pl",
       moduleBuild,
       "-am",
-      "-PtemplatesStage,pluginOutputDir,splunkDeps,missing-artifact-repos",
+      "-PtemplatesStage,pluginOutputDir",
       "-DpluginRunId=" + RandomStringUtils.randomAlphanumeric(16),
       // Skip shading for now due to flakiness / slowness in the process.
       "-DskipShade=" + skipShade,
@@ -488,14 +490,28 @@ public abstract class TemplateTestBase {
             && !templateMetadata.flexContainerName().isEmpty();
 
     // Property allows testing with Runner v2 / Unified Worker
-    if (System.getProperty("unifiedWorker") != null) {
+    String unifiedWorkerHarnessContainerImage =
+        System.getProperty("unifiedWorkerHarnessContainerImage");
+    if (System.getProperty("unifiedWorker") != null || unifiedWorkerHarnessContainerImage != null) {
       appendExperiment(options, "use_runner_v2");
 
       if (System.getProperty("sdkContainerImage") != null) {
         options.addParameter("sdkContainerImage", System.getProperty("sdkContainerImage"));
+      }
+      if (unifiedWorkerHarnessContainerImage != null) {
         appendExperiment(
-            options, "worker_harness_container_image=" + System.getProperty("sdkContainerImage"));
+            options,
+            "runner_harness_container_image="
+                + System.getProperty("unifiedWorkerHarnessContainerImage"));
+      }
+      if (System.getProperty("uwStagingExperiments") != null
+          || unifiedWorkerHarnessContainerImage != null) {
         appendExperiment(options, "disable_worker_rolling_upgrade");
+        appendExperiment(options, "use_beam_bq_sink");
+        appendExperiment(options, "beam_fn_api");
+        appendExperiment(options, "use_unified_worker");
+        appendExperiment(options, "use_portable_job_submission");
+        appendExperiment(options, "worker_region=" + REGION);
       }
     }
 

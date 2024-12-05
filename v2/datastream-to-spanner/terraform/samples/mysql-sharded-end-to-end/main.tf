@@ -2,6 +2,25 @@ resource "random_pet" "migration_id" {
   count  = length(var.shard_list)
   prefix = "smt"
 }
+
+# Setup network firewalls for datastream if creating a private connection.
+resource "google_compute_firewall" "allow-datastream" {
+  depends_on  = [google_project_service.enabled_apis]
+  count       = var.common_params.datastream_params.create_firewall_rule == true ? 1 : 0
+  project     = var.common_params.host_project != null ? var.common_params.host_project : var.common_params.project
+  name        = "allow-datastream"
+  network     = var.common_params.host_project != null ? "projects/${var.common_params.host_project}/global/networks/${var.common_params.datastream_params.private_connectivity.vpc_name}" : "projects/${var.common_params.project}/global/networks/${var.common_params.datastream_params.private_connectivity.vpc_name}"
+  description = "Allow traffic from private connectivity endpoint of Datastream"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["3306"]
+  }
+  source_ranges      = [var.common_params.datastream_params.private_connectivity.range]
+  target_tags        = var.common_params.datastream_params.firewall_rule_target_tags != null ? var.common_params.datastream_params.firewall_rule_target_tags : []
+  destination_ranges = var.common_params.datastream_params.firewall_rule_target_ranges != null ? var.common_params.datastream_params.firewall_rule_target_ranges : []
+}
+
 # Create a private connectivity configuration if needed.
 resource "google_datastream_private_connection" "datastream_private_connection" {
   depends_on            = [google_project_service.enabled_apis]
@@ -77,6 +96,16 @@ resource "google_storage_bucket_object" "session_file_object" {
   depends_on   = [google_project_service.enabled_apis]
   name         = "session.json"
   source       = var.common_params.dataflow_params.template_params.local_session_file_path
+  content_type = "application/json"
+  bucket       = google_storage_bucket.datastream_bucket[count.index].id
+}
+
+# upload local schema overrides file to the created GCS bucket
+resource "google_storage_bucket_object" "schema_overrides_file_object" {
+  count        = var.common_params.dataflow_params.template_params.local_schema_overrides_file_path != null ? length(var.shard_list) : 0
+  depends_on   = [google_project_service.enabled_apis]
+  name         = "schema-overrides.json"
+  source       = var.common_params.dataflow_params.template_params.local_schema_overrides_file_path
   content_type = "application/json"
   bucket       = google_storage_bucket.datastream_bucket[count.index].id
 }
@@ -182,7 +211,14 @@ resource "google_datastream_stream" "mysql_to_gcs" {
   location      = var.common_params.region
   display_name  = "${var.shard_list[count.index].shard_id != null ? var.shard_list[count.index].shard_id : random_pet.migration_id[count.index].id}-${var.shard_list[count.index].datastream_params.stream_id}"
   desired_state = "RUNNING"
-  backfill_all {
+  dynamic "backfill_all" {
+    for_each = var.common_params.datastream_params.enable_backfill ? [1] : []
+    content {}
+  }
+
+  dynamic "backfill_none" {
+    for_each = var.common_params.datastream_params.enable_backfill ? [] : [1]
+    content {}
   }
 
   source_config {
@@ -243,7 +279,7 @@ resource "google_project_iam_member" "live_migration_roles" {
 }
 # Dataflow Flex Template Job (for CDC to Spanner)
 resource "google_dataflow_flex_template_job" "live_migration_job" {
-  count = length(var.shard_list)
+  count = var.common_params.dataflow_params.skip_dataflow ? 0 : length(var.shard_list)
   depends_on = [
     google_project_service.enabled_apis, google_project_iam_member.live_migration_roles
   ] # Launch the template once the stream is created.
@@ -276,6 +312,13 @@ resource "google_dataflow_flex_template_job" "live_migration_job" {
     directoryWatchDurationInMinutes = tostring(var.common_params.dataflow_params.template_params.directory_watch_duration_in_minutes)
     spannerPriority                 = var.common_params.dataflow_params.template_params.spanner_priority
     dlqGcsPubSubSubscription        = var.shard_list[count.index].dataflow_params.template_params.dlq_gcs_pub_sub_subscription
+    transformationJarPath           = var.common_params.dataflow_params.template_params.transformation_jar_path
+    transformationClassName         = var.common_params.dataflow_params.template_params.transformation_class_name
+    transformationCustomParameters  = var.common_params.dataflow_params.template_params.transformation_custom_parameters
+    filteredEventsDirectory         = var.common_params.dataflow_params.template_params.filtered_events_directory
+    tableOverrides                  = var.common_params.dataflow_params.template_params.table_overrides
+    columnOverrides                 = var.common_params.dataflow_params.template_params.column_overrides
+    schemaOverridesFilePath         = var.common_params.dataflow_params.template_params.local_session_file_path != null ? "gs://${google_storage_bucket_object.schema_overrides_file_object[count.index].bucket}/${google_storage_bucket_object.schema_overrides_file_object[count.index].name}" : null
   }
 
   # Additional Job Configurations
@@ -293,7 +336,7 @@ resource "google_dataflow_flex_template_job" "live_migration_job" {
   service_account_email        = var.common_params.dataflow_params.runner_params.service_account_email
   skip_wait_on_job_termination = var.common_params.dataflow_params.runner_params.skip_wait_on_job_termination
   staging_location             = var.common_params.dataflow_params.runner_params.staging_location
-  subnetwork                   = var.common_params.host_project != null ? "https://www.googleapis.com/compute/v1/projects/${var.common_params.host_project}/regions/${var.common_params.region}/subnetworks/${var.common_params.dataflow_params.runner_params.subnetwork}" : "https://www.googleapis.com/compute/v1/projects/${var.common_params.project}/regions/${var.common_params.region}/subnetworks/${var.common_params.dataflow_params.runner_params.subnetwork}"
+  subnetwork                   = var.common_params.dataflow_params.runner_params.subnetwork != null ? var.common_params.host_project != null ? "https://www.googleapis.com/compute/v1/projects/${var.common_params.host_project}/regions/${var.common_params.region}/subnetworks/${var.common_params.dataflow_params.runner_params.subnetwork}" : "https://www.googleapis.com/compute/v1/projects/${var.common_params.project}/regions/${var.common_params.region}/subnetworks/${var.common_params.dataflow_params.runner_params.subnetwork}" : null
   temp_location                = var.common_params.dataflow_params.runner_params.temp_location
   on_delete                    = var.common_params.dataflow_params.runner_params.on_delete
   region                       = var.common_params.region

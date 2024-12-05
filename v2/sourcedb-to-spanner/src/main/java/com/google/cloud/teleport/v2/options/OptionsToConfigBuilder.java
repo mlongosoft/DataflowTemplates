@@ -16,9 +16,13 @@
 package com.google.cloud.teleport.v2.options;
 
 import static com.google.cloud.teleport.v2.source.reader.io.jdbc.iowrapper.config.JdbcIOWrapperConfig.builderWithMySqlDefaults;
+import static com.google.cloud.teleport.v2.source.reader.io.jdbc.iowrapper.config.JdbcIOWrapperConfig.builderWithPostgreSQLDefaults;
 
 import com.google.cloud.teleport.v2.source.reader.auth.dbauth.LocalCredentialsProvider;
+import com.google.cloud.teleport.v2.source.reader.io.jdbc.JdbcSchemaReference;
 import com.google.cloud.teleport.v2.source.reader.io.jdbc.iowrapper.config.JdbcIOWrapperConfig;
+import com.google.cloud.teleport.v2.source.reader.io.jdbc.iowrapper.config.SQLDialect;
+import com.google.cloud.teleport.v2.source.reader.io.jdbc.iowrapper.config.defaults.MySqlConfigDefaults;
 import com.google.cloud.teleport.v2.source.reader.io.schema.SourceSchemaReference;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
@@ -27,82 +31,84 @@ import com.google.re2j.Pattern;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.List;
+import java.util.Map.Entry;
+import javax.annotation.Nullable;
 import org.apache.beam.sdk.transforms.Wait;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public final class OptionsToConfigBuilder {
+
   private static final Logger LOG = LoggerFactory.getLogger(OptionsToConfigBuilder.class);
+  public static final String DEFAULT_POSTGRESQL_NAMESPACE = "public";
 
-  public static final class MySql {
+  public static JdbcIOWrapperConfig getJdbcIOWrapperConfigWithDefaults(
+      SourceDbToSpannerOptions options,
+      List<String> tables,
+      String shardId,
+      Wait.OnSignal<?> waitOn) {
+    SQLDialect sqlDialect = SQLDialect.valueOf(options.getSourceDbDialect());
+    String sourceDbURL = options.getSourceConfigURL();
+    String dbName = extractDbFromURL(sourceDbURL);
+    String username = options.getUsername();
+    String password = options.getPassword();
+    String namespace = options.getNamespace();
 
-    private static String extractDbFromURL(String sourceDbUrl) {
-      URI uri;
-      try {
-        // Strip off the prefix 'jdbc:' which the library cannot handle.
-        uri = new URI(sourceDbUrl.substring(5));
-      } catch (URISyntaxException e) {
-        throw new RuntimeException(String.format("Unable to parse url: %s", sourceDbUrl), e);
-      }
-      // Remove '/' before returning.
-      return uri.getPath().substring(1);
-    }
+    String jdbcDriverClassName = options.getJdbcDriverClassName();
+    String jdbcDriverJars = options.getJdbcDriverJars();
+    long maxConnections =
+        options.getMaxConnections() > 0 ? (long) (options.getMaxConnections()) : 0;
+    Integer numPartitions = options.getNumPartitions();
 
-    public static JdbcIOWrapperConfig configWithMySqlDefaultsFromOptions(
-        SourceDbToSpannerOptions options,
-        List<String> tables,
-        String shardId,
-        Wait.OnSignal<?> waitOn) {
-      String sourceDbURL = options.getSourceDbURL();
-      String dbName = extractDbFromURL(sourceDbURL);
-      String username = options.getUsername();
-      String password = options.getPassword();
-
-      String jdbcDriverClassName = options.getJdbcDriverClassName();
-      String jdbcDriverJars = options.getJdbcDriverJars();
-      long maxConnections =
-          options.getMaxConnections() > 0 ? (long) (options.getMaxConnections()) : 0;
-      Integer numPartitions = options.getNumPartitions();
-
-      return getJdbcIOWrapperConfig(
-          tables,
-          sourceDbURL,
-          null,
-          0,
-          username,
-          password,
-          dbName,
-          shardId,
-          jdbcDriverClassName,
-          jdbcDriverJars,
-          maxConnections,
-          numPartitions,
-          waitOn);
-    }
+    return getJdbcIOWrapperConfig(
+        sqlDialect,
+        tables,
+        sourceDbURL,
+        null,
+        null,
+        0,
+        username,
+        password,
+        dbName,
+        namespace,
+        shardId,
+        jdbcDriverClassName,
+        jdbcDriverJars,
+        maxConnections,
+        numPartitions,
+        waitOn,
+        options.getFetchSize());
   }
 
   public static JdbcIOWrapperConfig getJdbcIOWrapperConfig(
+      SQLDialect sqlDialect,
       List<String> tables,
       String sourceDbURL,
       String host,
+      String connectionProperties,
       int port,
       String username,
       String password,
       String dbName,
+      String namespace,
       String shardId,
       String jdbcDriverClassName,
       String jdbcDriverJars,
       long maxConnections,
       Integer numPartitions,
-      Wait.OnSignal<?> waitOn) {
-    JdbcIOWrapperConfig.Builder builder = builderWithMySqlDefaults();
+      Wait.OnSignal<?> waitOn,
+      Integer fetchSize) {
+    JdbcIOWrapperConfig.Builder builder = builderWithDefaultsFor(sqlDialect);
+    SourceSchemaReference sourceSchemaReference =
+        sourceSchemaReferenceFrom(sqlDialect, dbName, namespace);
     builder =
         builder
-            .setSourceSchemaReference(SourceSchemaReference.builder().setDbName(dbName).build())
+            .setSourceSchemaReference(sourceSchemaReference)
             .setDbAuth(
                 LocalCredentialsProvider.builder()
-                    .setUserName(username)
+                    .setUserName(
+                        username) // TODO - support taking username and password from url as well
                     .setPassword(password)
                     .build())
             .setJdbcDriverClassName(jdbcDriverClassName)
@@ -111,12 +117,30 @@ public final class OptionsToConfigBuilder {
       builder = builder.setMaxConnections(maxConnections);
     }
 
-    // TODO - add mysql specific method in mysql class.
-    if (sourceDbURL == null) {
-      sourceDbURL = "jdbc:mysql://" + host + ":" + port + "/" + dbName;
+    switch (sqlDialect) {
+      case MYSQL:
+        if (sourceDbURL == null) {
+          sourceDbURL = "jdbc:mysql://" + host + ":" + port + "/" + dbName;
+          if (StringUtils.isNotBlank(connectionProperties)) {
+            sourceDbURL = sourceDbURL + "?" + connectionProperties;
+          }
+        }
+        for (Entry<String, String> entry :
+            MySqlConfigDefaults.DEFAULT_MYSQL_URL_PROPERTIES.entrySet()) {
+          sourceDbURL = addParamToJdbcUrl(sourceDbURL, entry.getKey(), entry.getValue());
+        }
+        sourceDbURL = mysqlSetCursorModeIfNeeded(sqlDialect, sourceDbURL, fetchSize);
+        break;
+      case POSTGRESQL:
+        if (sourceDbURL == null) {
+          sourceDbURL = "jdbc:postgresql://" + host + ":" + port + "/" + dbName;
+        }
+        sourceDbURL = sourceDbURL + "?currentSchema=" + sourceSchemaReference.jdbc().namespace();
+        if (StringUtils.isNotBlank(connectionProperties)) {
+          sourceDbURL = sourceDbURL + "&" + connectionProperties;
+        }
+        break;
     }
-
-    sourceDbURL = addParamToJdbcUrl(sourceDbURL, "allowMultiQueries", "true");
 
     builder.setSourceDbURL(sourceDbURL);
     if (!StringUtils.isEmpty(shardId)) {
@@ -129,7 +153,34 @@ public final class OptionsToConfigBuilder {
 
     builder.setMaxPartitions(numPartitions);
     builder = builder.setTables(ImmutableList.copyOf(tables));
+    builder = builder.setMaxFetchSize(fetchSize);
     return builder.build();
+  }
+
+  /**
+   * For MySQL Dialect, if Fetchsize is expecitly set by the user, enables `useCursorFetch`.
+   *
+   * @param sqlDialect Sql Dialect.
+   * @param url DB Url from passed configs.
+   * @param fetchSize FetchSize Setting (Null if user has not explicitly set)
+   * @return Updated URL with `useCursorFetch` only if dialect is MySql and Fetchsize is not null.
+   *     Same as input URL in all other cases.
+   */
+  @VisibleForTesting
+  @Nullable
+  protected static String mysqlSetCursorModeIfNeeded(
+      SQLDialect sqlDialect, String url, @Nullable Integer fetchSize) {
+    if (fetchSize == null) {
+      LOG.info(
+          "FetchSize is not explicitly configured. In case of out of memory errors, please set `FetSize` according to the available memory and maximum size of a row.");
+      return url;
+    }
+    if (sqlDialect != SQLDialect.MYSQL) {
+      return url;
+    }
+    LOG.info("For Mysql, Fetchsize is explicitly configured. So setting `useCursorMode=true`.");
+    String updatedUrl = addParamToJdbcUrl(url, "useCursorFetch", "true");
+    return updatedUrl;
   }
 
   @VisibleForTesting
@@ -196,6 +247,40 @@ public final class OptionsToConfigBuilder {
 
       return baseUrl + "?" + newQuery;
     }
+  }
+
+  private static String extractDbFromURL(String sourceDbUrl) {
+    URI uri;
+    try {
+      // Strip off the prefix 'jdbc:' which the library cannot handle.
+      uri = new URI(sourceDbUrl.substring(5));
+    } catch (URISyntaxException e) {
+      throw new RuntimeException(String.format("Unable to parse url: %s", sourceDbUrl), e);
+    }
+    // Remove '/' before returning.
+    return uri.getPath().substring(1);
+  }
+
+  private static JdbcIOWrapperConfig.Builder builderWithDefaultsFor(SQLDialect dialect) {
+    if (dialect == SQLDialect.POSTGRESQL) {
+      return builderWithPostgreSQLDefaults();
+    }
+    return builderWithMySqlDefaults();
+  }
+
+  // TODO(vardhanvthigle): Standardize for Css.
+  private static SourceSchemaReference sourceSchemaReferenceFrom(
+      SQLDialect dialect, String dbName, String namespace) {
+    JdbcSchemaReference.Builder builder = JdbcSchemaReference.builder();
+    // Namespaces are not supported for MySQL
+    if (dialect == SQLDialect.POSTGRESQL) {
+      if (StringUtils.isBlank(namespace)) {
+        builder.setNamespace(DEFAULT_POSTGRESQL_NAMESPACE);
+      } else {
+        builder.setNamespace(namespace);
+      }
+    }
+    return SourceSchemaReference.ofJdbc(builder.setDbName(dbName).build());
   }
 
   private OptionsToConfigBuilder() {}

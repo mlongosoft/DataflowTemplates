@@ -78,6 +78,7 @@ import org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.base.Supplier;
 import org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.base.Suppliers;
 import org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.base.Throwables;
 import org.apache.commons.text.StringSubstitutor;
+import org.apache.parquet.Strings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -229,6 +230,30 @@ public class BigQueryConverters {
     String getQueryLocation();
 
     void setQueryLocation(String query);
+
+    @TemplateParameter.Text(
+        order = 6,
+        optional = true,
+        description = "BigQuery temporary dataset reference when reading from the query.",
+        helpText =
+            "With this option, you can set an existing dataset to create the temporary table "
+                + "to store the results of the query.",
+        example = "temp_dataset")
+    String getQueryTempDataset();
+
+    void setQueryTempDataset(String queryTempDataset);
+
+    @TemplateParameter.KmsEncryptionKey(
+        order = 7,
+        optional = true,
+        description = "Google Cloud KMS key",
+        helpText =
+            "If reading from BigQuery using query source, use this Cloud KMS key to encrypt any temporary tables created.",
+        example =
+            "projects/your-project/locations/global/keyRings/your-keyring/cryptoKeys/your-key")
+    String getKMSEncryptionKey();
+
+    void setKMSEncryptionKey(String keyName);
   }
 
   /**
@@ -328,11 +353,17 @@ public class BigQueryConverters {
     @Override
     public PCollection<T> expand(PBegin pipeline) {
 
+      BigQueryIO.TypedRead<T> readFunction = readFunction();
+
+      if (!Strings.isNullOrEmpty(options().getKMSEncryptionKey())) {
+        readFunction = readFunction.withKmsKey(options().getKMSEncryptionKey());
+      }
+
       if (options().getQuery() == null) {
         LOG.info("No query provided, reading directly from: " + options().getInputTableSpec());
         return pipeline.apply(
             "ReadFromBigQuery",
-            readFunction()
+            readFunction
                 .from(options().getInputTableSpec())
                 .withTemplateCompatibility()
                 .withMethod(Method.DIRECT_READ));
@@ -345,20 +376,22 @@ public class BigQueryConverters {
           LOG.info("Using Standard SQL");
           return pipeline.apply(
               "ReadFromBigQueryWithQuery",
-              readFunction()
+              readFunction
                   .fromQuery(options().getQuery())
                   .withTemplateCompatibility()
                   .withQueryLocation(options().getQueryLocation())
+                  .withQueryTempDataset(options().getQueryTempDataset())
                   .usingStandardSql());
         } else {
 
           LOG.info("Using Legacy SQL");
           return pipeline.apply(
               "ReadFromBigQueryWithQuery",
-              readFunction()
+              readFunction
                   .fromQuery(options().getQuery())
                   .withTemplateCompatibility()
-                  .withQueryLocation(options().getQueryLocation()));
+                  .withQueryLocation(options().getQueryLocation())
+                  .withQueryTempDataset(options().getQueryTempDataset()));
         }
       }
     }

@@ -40,13 +40,21 @@ import com.google.protobuf.DescriptorProtos.FileDescriptorProto;
 import com.google.protobuf.DescriptorProtos.FileDescriptorSet;
 import com.google.protobuf.DescriptorProtos.MessageOptions;
 import com.google.protobuf.InvalidProtocolBufferException;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
+import java.util.Queue;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.apache.beam.sdk.values.KV;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -97,9 +105,22 @@ public class InformationSchemaScanner {
         listSequenceOptionsPostgreSQL(builder, currentCounters);
       }
     }
+    if (placementsSupported()) {
+      listPlacements(builder);
+    }
+    if (isPropertyGraphSupported()) {
+      listPropertyGraphs(builder);
+      listPropertyGraphPropertyDeclarations(builder);
+      listPropertyGraphLabels(builder);
+      listPropertyGraphNodeTables(builder);
+      listPropertyGraphEdgeTables(builder);
+    }
     Map<String, NavigableMap<String, Index.Builder>> indexes = Maps.newHashMap();
     listIndexes(indexes);
     listIndexColumns(builder, indexes);
+    if (dialect == Dialect.GOOGLE_STANDARD_SQL) {
+      listIndexOptions(builder, indexes);
+    }
 
     for (Map.Entry<String, NavigableMap<String, Index.Builder>> tableEntry : indexes.entrySet()) {
       String tableName = tableEntry.getKey();
@@ -299,15 +320,23 @@ public class InformationSchemaScanner {
       String generationExpression = resultSet.isNull(7) ? "" : resultSet.getString(7);
       boolean isStored = !resultSet.isNull(8) && resultSet.getString(8).equalsIgnoreCase("YES");
       String defaultExpression = resultSet.isNull(9) ? null : resultSet.getString(9);
+      boolean isHidden = dialect == Dialect.GOOGLE_STANDARD_SQL ? resultSet.getBoolean(10) : false;
+      boolean isPlacementKey =
+          dialect == Dialect.GOOGLE_STANDARD_SQL
+              ? resultSet.getBoolean(11)
+              : resultSet.getBoolean(10);
+
       builder
           .createTable(tableName)
           .column(columnName)
           .parseType(spannerType)
           .notNull(!nullable)
           .isGenerated(isGenerated)
+          .isHidden(isHidden)
           .generationExpression(generationExpression)
           .isStored(isStored)
           .defaultExpression(defaultExpression)
+          .isPlacementKey(isPlacementKey)
           .endColumn()
           .endTable();
     }
@@ -315,30 +344,47 @@ public class InformationSchemaScanner {
 
   @VisibleForTesting
   Statement listColumnsSQL() {
+    StringBuilder sb = new StringBuilder();
+    sb.append(
+        "WITH placementkeycolumns AS ("
+            + " SELECT c.table_name, c.column_name, c.constraint_name"
+            + " FROM information_schema.constraint_column_usage AS c"
+            + " WHERE c.constraint_name = CONCAT('PLACEMENT_KEY_', c.table_name)"
+            + ") ");
     switch (dialect) {
       case GOOGLE_STANDARD_SQL:
-        return Statement.of(
+        sb.append(
             "SELECT c.table_schema, c.table_name, c.column_name,"
                 + " c.ordinal_position, c.spanner_type, c.is_nullable,"
-                + " c.is_generated, c.generation_expression, c.is_stored, c.column_default"
+                + " c.is_generated, c.generation_expression, c.is_stored,"
+                + " c.column_default, c.is_hidden,"
+                + " pkc.constraint_name IS NOT NULL AS is_placement_key"
                 + " FROM information_schema.columns as c"
+                + " LEFT JOIN placementkeycolumns AS pkc"
+                + " ON c.table_name = pkc.table_name AND c.column_name = pkc.column_name"
                 + " WHERE c.table_schema NOT IN"
                 + " ('INFORMATION_SCHEMA', 'SPANNER_SYS')"
                 + " AND c.spanner_state = 'COMMITTED' "
                 + " ORDER BY c.table_name, c.ordinal_position");
+        break;
       case POSTGRESQL:
-        return Statement.of(
+        sb.append(
             "SELECT c.table_schema, c.table_name, c.column_name,"
                 + " c.ordinal_position, c.spanner_type, c.is_nullable,"
-                + " c.is_generated, c.generation_expression, c.is_stored, c.column_default"
+                + " c.is_generated, c.generation_expression, c.is_stored, c.column_default,"
+                + " pkc.constraint_name IS NOT NULL AS is_placement_key"
                 + " FROM information_schema.columns as c"
+                + " LEFT JOIN placementkeycolumns AS pkc"
+                + " ON c.table_name = pkc.table_name AND c.column_name = pkc.column_name"
                 + " WHERE c.table_schema NOT IN "
                 + " ('information_schema', 'spanner_sys', 'pg_catalog') "
                 + " AND c.spanner_state = 'COMMITTED' "
                 + " ORDER BY c.table_name, c.ordinal_position");
+        break;
       default:
         throw new IllegalArgumentException("Unrecognized dialect: " + dialect);
     }
+    return Statement.of(sb.toString());
   }
 
   private void listIndexes(Map<String, NavigableMap<String, Index.Builder>> indexes) {
@@ -364,10 +410,24 @@ public class InformationSchemaScanner {
           (dialect == Dialect.GOOGLE_STANDARD_SQL)
               ? resultSet.getBoolean(5)
               : resultSet.getString(5).equalsIgnoreCase("YES");
-      String filter =
-          (dialect == Dialect.GOOGLE_STANDARD_SQL || resultSet.isNull(6))
-              ? null
-              : resultSet.getString(6);
+      String filter = resultSet.isNull(6) ? null : resultSet.getString(6);
+
+      // Note that 'type' is only queried from GoogleSQL and is not from Postgres and
+      // the number of columns will be different.
+      String type =
+          (dialect == Dialect.GOOGLE_STANDARD_SQL && !resultSet.isNull(7))
+              ? resultSet.getString(7)
+              : null;
+
+      ImmutableList<String> searchPartitionBy =
+          (dialect == Dialect.GOOGLE_STANDARD_SQL && !resultSet.isNull(8))
+              ? ImmutableList.<String>builder().addAll(resultSet.getStringList(8)).build()
+              : null;
+
+      ImmutableList<String> searchOrderBy =
+          (dialect == Dialect.GOOGLE_STANDARD_SQL && !resultSet.isNull(9))
+              ? ImmutableList.<String>builder().addAll(resultSet.getStringList(9)).build()
+              : null;
 
       Map<String, Index.Builder> tableIndexes =
           indexes.computeIfAbsent(tableName, k -> Maps.newTreeMap());
@@ -380,6 +440,9 @@ public class InformationSchemaScanner {
               .unique(unique)
               .nullFiltered(nullFiltered)
               .interleaveIn(parent)
+              .type(type)
+              .partitionBy(searchPartitionBy)
+              .orderBy(searchOrderBy)
               .filter(filter));
     }
   }
@@ -390,11 +453,11 @@ public class InformationSchemaScanner {
       case GOOGLE_STANDARD_SQL:
         return Statement.of(
             "SELECT t.table_schema, t.table_name, t.index_name, t.parent_table_name, t.is_unique,"
-                + " t.is_null_filtered"
+                + " t.is_null_filtered, t.filter, t.index_type, t.search_partition_by, t.search_order_by"
                 + " FROM information_schema.indexes AS t"
                 + " WHERE t.table_schema NOT IN"
                 + " ('INFORMATION_SCHEMA', 'SPANNER_SYS') AND"
-                + " t.index_type='INDEX' AND t.spanner_is_managed = FALSE"
+                + " (t.index_type='INDEX' OR t.index_type='SEARCH' OR t.index_type='VECTOR') AND t.spanner_is_managed = FALSE"
                 + " ORDER BY t.table_name, t.index_name");
       case POSTGRESQL:
         return Statement.of(
@@ -419,6 +482,8 @@ public class InformationSchemaScanner {
       String columnName = resultSet.getString(2);
       String ordering = resultSet.isNull(3) ? null : resultSet.getString(3);
       String indexLocalName = resultSet.getString(4);
+      String indexType = dialect == Dialect.GOOGLE_STANDARD_SQL ? resultSet.getString(5) : null;
+      String spannerType = dialect == Dialect.GOOGLE_STANDARD_SQL ? resultSet.getString(6) : null;
 
       if (indexLocalName.equals("PRIMARY_KEY")) {
         IndexColumn.IndexColumnsBuilder<Table.Builder> pkBuilder =
@@ -430,6 +495,12 @@ public class InformationSchemaScanner {
         }
         pkBuilder.end().endTable();
       } else {
+        if (indexType != null && ordering != null) {
+          if ((indexType.equals("SEARCH") && !spannerType.equals("TOKENLIST"))
+              || (indexType.equals("VECTOR") && !spannerType.startsWith("ARRAY"))) {
+            continue;
+          }
+        }
         Map<String, Index.Builder> tableIndexes = indexes.get(tableName);
         if (tableIndexes == null) {
           continue;
@@ -445,7 +516,10 @@ public class InformationSchemaScanner {
         }
         IndexColumn.IndexColumnsBuilder<Index.Builder> indexColumnsBuilder =
             indexBuilder.columns().create().name(columnName);
-        if (ordering == null) {
+        if (spannerType != null
+            && (spannerType.equals("TOKENLIST") || spannerType.startsWith("ARRAY"))) {
+          indexColumnsBuilder.none();
+        } else if (ordering == null) {
           indexColumnsBuilder.storing();
         } else {
           ordering = ordering.toUpperCase();
@@ -472,7 +546,8 @@ public class InformationSchemaScanner {
     switch (dialect) {
       case GOOGLE_STANDARD_SQL:
         return Statement.of(
-            "SELECT t.table_schema, t.table_name, t.column_name, t.column_ordering, t.index_name "
+            "SELECT t.table_schema, t.table_name, t.column_name, t.column_ordering, t.index_name,"
+                + " t.index_type, t.spanner_type "
                 + "FROM information_schema.index_columns AS t "
                 + " WHERE t.table_schema NOT IN"
                 + " ('INFORMATION_SCHEMA', 'SPANNER_SYS')"
@@ -484,6 +559,70 @@ public class InformationSchemaScanner {
                 + "WHERE t.table_schema NOT IN "
                 + "('information_schema', 'spanner_sys', 'pg_catalog') "
                 + "ORDER BY t.table_name, t.index_name, t.ordinal_position");
+      default:
+        throw new IllegalArgumentException("Unrecognized dialect: " + dialect);
+    }
+  }
+
+  private void listIndexOptions(
+      Ddl.Builder builder, Map<String, NavigableMap<String, Index.Builder>> indexes) {
+    Statement statement = listIndexOptionsSQL();
+
+    ResultSet resultSet = context.executeQuery(statement);
+
+    Map<KV<String, String>, ImmutableList.Builder<String>> allOptions = Maps.newHashMap();
+    while (resultSet.next()) {
+      String tableName = getQualifiedName(resultSet.getString(0), resultSet.getString(1));
+      String indexName = resultSet.getString(2);
+      String indexType = resultSet.getString(3);
+      String optionName = resultSet.getString(4);
+      String optionType = resultSet.getString(5);
+      String optionValue = resultSet.getString(6);
+
+      KV<String, String> kv = KV.of(tableName, indexName);
+      ImmutableList.Builder<String> options =
+          allOptions.computeIfAbsent(kv, k -> ImmutableList.builder());
+
+      if (optionType.equalsIgnoreCase("STRING")) {
+        options.add(optionName + "=\"" + OPTION_STRING_ESCAPER.escape(optionValue) + "\"");
+      } else if (optionType.equalsIgnoreCase("character varying")) {
+        options.add(optionName + "='" + OPTION_STRING_ESCAPER.escape(optionValue) + "'");
+      } else {
+        options.add(optionName + "=" + optionValue);
+      }
+    }
+
+    for (Map.Entry<KV<String, String>, ImmutableList.Builder<String>> entry :
+        allOptions.entrySet()) {
+      String tableName = entry.getKey().getKey();
+      String indexName = entry.getKey().getValue();
+      ImmutableList<String> options = entry.getValue().build();
+
+      Map<String, Index.Builder> tableIndexes = indexes.get(tableName);
+      if (tableIndexes == null) {
+        continue;
+      }
+      Index.Builder indexBuilder = tableIndexes.get(indexName);
+      if (indexBuilder == null) {
+        LOG.warn("Can not find index using name {}", indexName);
+        continue;
+      }
+
+      indexBuilder.options(options);
+    }
+  }
+
+  @VisibleForTesting
+  Statement listIndexOptionsSQL() {
+    switch (dialect) {
+      case GOOGLE_STANDARD_SQL:
+        return Statement.of(
+            "SELECT t.table_schema, t.table_name, t.index_name, t.index_type,"
+                + " t.option_name, t.option_type, t.option_value"
+                + " FROM information_schema.index_options AS t"
+                + " WHERE t.table_schema NOT IN"
+                + " ('INFORMATION_SCHEMA', 'SPANNER_SYS')"
+                + " ORDER BY t.table_name, t.index_name, t.option_name");
       default:
         throw new IllegalArgumentException("Unrecognized dialect: " + dialect);
     }
@@ -569,8 +708,13 @@ public class InformationSchemaScanner {
                     + " kcu2.table_schema,"
                     + " kcu2.table_name,"
                     + " kcu2.column_name,"
-                    + " rc.delete_rule"
+                    + " rc.delete_rule,"
+                    + " tc.enforced"
                     + " FROM information_schema.referential_constraints as rc"
+                    + " INNER JOIN information_schema.table_constraints as tc"
+                    + " ON tc.constraint_catalog = rc.constraint_catalog"
+                    + " AND tc.constraint_schema = rc.constraint_schema"
+                    + " AND tc.constraint_name = rc.constraint_name"
                     + " INNER JOIN information_schema.key_column_usage as kcu1"
                     + " ON kcu1.constraint_catalog = rc.constraint_catalog"
                     + " AND kcu1.constraint_schema = rc.constraint_schema"
@@ -596,8 +740,13 @@ public class InformationSchemaScanner {
                     + " kcu2.table_schema,"
                     + " kcu2.table_name,"
                     + " kcu2.column_name,"
-                    + " rc.delete_rule"
+                    + " rc.delete_rule,"
+                    + " tc.enforced"
                     + " FROM information_schema.referential_constraints as rc"
+                    + " INNER JOIN information_schema.table_constraints as tc"
+                    + " ON tc.constraint_catalog = rc.constraint_catalog"
+                    + " AND tc.constraint_schema = rc.constraint_schema"
+                    + " AND tc.constraint_name = rc.constraint_name"
                     + " INNER JOIN information_schema.key_column_usage as kcu1"
                     + " ON kcu1.constraint_catalog = rc.constraint_catalog"
                     + " AND kcu1.constraint_schema = rc.constraint_schema"
@@ -625,6 +774,7 @@ public class InformationSchemaScanner {
       String referencedTable = getQualifiedName(resultSet.getString(4), resultSet.getString(5));
       String referencedColumn = resultSet.getString(6);
       String deleteRule = resultSet.getString(7);
+      String enforced = dialect == Dialect.GOOGLE_STANDARD_SQL ? resultSet.getString(8) : null;
       Map<String, ForeignKey.Builder> tableForeignKeys =
           foreignKeys.computeIfAbsent(table, k -> Maps.newTreeMap());
       ForeignKey.Builder foreignKey =
@@ -638,6 +788,18 @@ public class InformationSchemaScanner {
       if (!isNullOrEmpty(deleteRule)) {
         foreignKey.referentialAction(
             Optional.of(ReferentialAction.getReferentialAction("DELETE", deleteRule)));
+      }
+      if (!isNullOrEmpty(enforced)) {
+        switch (enforced.trim().toUpperCase()) {
+          case "YES":
+            foreignKey.isEnforced(true);
+            break;
+          case "NO":
+            foreignKey.isEnforced(false);
+            break;
+          default:
+            throw new IllegalArgumentException("Illegal enforcement: " + enforced);
+        }
       }
       foreignKey.columnsBuilder().add(column);
       foreignKey.referencedColumnsBuilder().add(referencedColumn);
@@ -764,6 +926,271 @@ public class InformationSchemaScanner {
   // TODO: Remove after models are supported in POSTGRESQL.
   private boolean isModelSupported() {
     return dialect == Dialect.GOOGLE_STANDARD_SQL;
+  }
+
+  private boolean isPropertyGraphSupported() {
+    return dialect == Dialect.GOOGLE_STANDARD_SQL;
+  }
+
+  private void listPropertyGraphs(Ddl.Builder builder) {
+    ResultSet resultSet =
+        context.executeQuery(
+            Statement.of(
+                "SELECT t.property_graph_schema, t.property_graph_name "
+                    + " FROM information_schema.property_graphs AS t "
+                    + " WHERE t.property_graph_schema NOT IN ('INFORMATION_SCHEMA', 'SPANNER_SYS')"));
+
+    while (resultSet.next()) {
+      String propertyGraphName = getQualifiedName(resultSet.getString(0), resultSet.getString(1));
+      LOG.debug("Schema PropertyGraph {}", propertyGraphName);
+      builder.createPropertyGraph(propertyGraphName).endPropertyGraph();
+    }
+  }
+
+  private void listPropertyGraphPropertyDeclarations(Ddl.Builder builder) {
+    ResultSet resultSet =
+        context.executeQuery(
+            Statement.of(
+                "SELECT t.property_graph_schema, t.property_graph_name, "
+                    + "t.property_graph_metadata_json.propertyDeclarations "
+                    + "FROM information_schema.property_graphs AS t "
+                    + "WHERE t.property_graph_schema NOT IN ('INFORMATION_SCHEMA', 'SPANNER_SYS')"));
+
+    while (resultSet.next()) {
+      String propertyGraphSchema = resultSet.getString(0);
+      String propertyGraphName = resultSet.getString(1);
+      String propertyGraphNameQualified = getQualifiedName(propertyGraphSchema, propertyGraphName);
+      String propertyDeclarationsJson = resultSet.getJson(2);
+
+      LOG.debug("Schema PropertyGraph {}", propertyGraphNameQualified);
+
+      try {
+        JSONArray propertyDeclarationsArray = new JSONArray(propertyDeclarationsJson);
+
+        for (int i = 0; i < propertyDeclarationsArray.length(); i++) {
+          JSONObject propertyDeclaration = propertyDeclarationsArray.getJSONObject(i);
+
+          String name = propertyDeclaration.getString("name");
+          String type = propertyDeclaration.getString("type");
+
+          builder
+              .createPropertyGraph(propertyGraphNameQualified)
+              .addPropertyDeclaration(new PropertyGraph.PropertyDeclaration(name, type))
+              .endPropertyGraph();
+        }
+      } catch (Exception e) {
+        LOG.error("Error parsing property declarations JSON: {}", e.getMessage());
+      }
+    }
+  }
+
+  private void listPropertyGraphLabels(Ddl.Builder builder) {
+    ResultSet resultSet =
+        context.executeQuery(
+            Statement.of(
+                "SELECT t.property_graph_schema, t.property_graph_name, "
+                    + "t.property_graph_metadata_json.labels "
+                    + "FROM information_schema.property_graphs AS t "
+                    + "WHERE t.property_graph_schema NOT IN ('INFORMATION_SCHEMA', 'SPANNER_SYS')"));
+
+    while (resultSet.next()) {
+      String propertyGraphSchema = resultSet.getString(0);
+      String propertyGraphName = resultSet.getString(1);
+      String propertyGraphNameQualified = getQualifiedName(propertyGraphSchema, propertyGraphName);
+      String labelsJson = resultSet.getJson(2);
+
+      LOG.debug("Schema PropertyGraph {}", propertyGraphNameQualified);
+
+      try {
+        JSONArray labelsArray = new JSONArray(labelsJson);
+
+        for (int i = 0; i < labelsArray.length(); i++) {
+          JSONObject label = labelsArray.getJSONObject(i);
+          String name = label.getString("name");
+          JSONArray propertyDeclarationNamesArray = label.getJSONArray("propertyDeclarationNames");
+
+          List<String> propertyNames = new ArrayList<>();
+          for (int j = 0; j < propertyDeclarationNamesArray.length(); j++) {
+            String propertyName = propertyDeclarationNamesArray.getString(j);
+            propertyNames.add(propertyName);
+          }
+
+          ImmutableList<String> immutablePropertyNames = ImmutableList.copyOf(propertyNames);
+          PropertyGraph.GraphElementLabel elementLabel =
+              new PropertyGraph.GraphElementLabel(name, immutablePropertyNames);
+
+          builder
+              .createPropertyGraph(propertyGraphNameQualified)
+              .addLabel(elementLabel)
+              .endPropertyGraph();
+        }
+      } catch (Exception e) {
+        LOG.error("Error parsing labels JSON: {}", e.getMessage());
+      }
+    }
+  }
+
+  public static PropertyGraph getPropertyGraphByName(
+      Collection<PropertyGraph> graphs, String propertyGraphName) {
+    return graphs.stream()
+        .filter(graph -> graph.name().equals(propertyGraphName))
+        .findFirst()
+        .orElse(null);
+  }
+
+  private void listPropertyGraphTables(Ddl.Builder builder, String tableType) {
+    ResultSet resultSet =
+        context.executeQuery(
+            Statement.of(
+                "SELECT t.property_graph_schema, t.property_graph_name, "
+                    + "t.property_graph_metadata_json."
+                    + tableType
+                    + " FROM information_schema.property_graphs AS t "
+                    + "WHERE t.property_graph_schema NOT IN ('INFORMATION_SCHEMA', 'SPANNER_SYS')"));
+
+    while (resultSet.next()) {
+      String propertyGraphSchema = resultSet.getString(0);
+      String propertyGraphName = resultSet.getString(1);
+      String propertyGraphNameQualified = getQualifiedName(propertyGraphSchema, propertyGraphName);
+
+      String tablesJson;
+      try {
+        tablesJson = resultSet.getJson(2);
+      } catch (Exception edgeTableException) {
+        LOG.debug(propertyGraphNameQualified + " does not contain any edge tables");
+        return;
+      }
+
+      LOG.debug("Schema PropertyGraph {}", propertyGraphNameQualified);
+
+      try {
+        JSONArray tablesArray = new JSONArray(tablesJson);
+
+        PropertyGraph propertyGraph =
+            getPropertyGraphByName(builder.build().propertyGraphs(), propertyGraphNameQualified);
+        PropertyGraph.Builder propertyGraphBuilder = propertyGraph.toBuilder();
+        if (propertyGraph == null) {
+          throw new RuntimeException("Property graph not found: " + propertyGraphNameQualified);
+        }
+
+        for (int i = 0; i < tablesArray.length(); i++) {
+          JSONObject table = tablesArray.getJSONObject(i);
+
+          String baseTableName = table.getString("baseTableName");
+          JSONArray keyColumnsArray = table.getJSONArray("keyColumns");
+          String kind = table.getString("kind");
+          JSONArray labelNamesArray = table.getJSONArray("labelNames");
+          String name = table.getString("name");
+          JSONArray propertyDefinitionsArray = table.getJSONArray("propertyDefinitions");
+
+          ImmutableList.Builder<String> keyColumnsBuilder = ImmutableList.builder();
+          for (int j = 0; j < keyColumnsArray.length(); j++) {
+            keyColumnsBuilder.add(keyColumnsArray.getString(j));
+          }
+          ImmutableList<String> keyColumns = keyColumnsBuilder.build();
+
+          GraphElementTable.Builder graphElementTableBuilder =
+              GraphElementTable.builder()
+                  .propertyGraphBuilder(propertyGraphBuilder)
+                  .name(name)
+                  .baseTableName(baseTableName)
+                  .kind(GraphElementTable.Kind.valueOf(kind))
+                  .keyColumns(keyColumns);
+
+          // If it's an edge table, extract source and destination node table references
+          if (tableType.equals("edgeTables")) {
+            JSONObject sourceNodeTable = table.getJSONObject("sourceNodeTable");
+            JSONObject destinationNodeTable = table.getJSONObject("destinationNodeTable");
+
+            GraphElementTable.GraphNodeTableReference sourceNodeTableReference =
+                new GraphElementTable.GraphNodeTableReference(
+                    sourceNodeTable.getString("nodeTableName"),
+                    ImmutableList.copyOf(
+                        toStringList(sourceNodeTable.getJSONArray("nodeTableColumns"))),
+                    ImmutableList.copyOf(
+                        toStringList(sourceNodeTable.getJSONArray("edgeTableColumns"))));
+
+            GraphElementTable.GraphNodeTableReference destinationNodeTableReference =
+                new GraphElementTable.GraphNodeTableReference(
+                    destinationNodeTable.getString("nodeTableName"),
+                    ImmutableList.copyOf(
+                        toStringList(destinationNodeTable.getJSONArray("nodeTableColumns"))),
+                    ImmutableList.copyOf(
+                        toStringList(destinationNodeTable.getJSONArray("edgeTableColumns"))));
+
+            graphElementTableBuilder
+                .sourceNodeTable(sourceNodeTableReference)
+                .targetNodeTable(destinationNodeTableReference);
+          }
+
+          List<GraphElementTable.LabelToPropertyDefinitions> labelsToPropertyDefinitions =
+              new ArrayList<>();
+          for (int j = 0; j < labelNamesArray.length(); j++) {
+            String labelName = labelNamesArray.getString(j);
+
+            PropertyGraph.GraphElementLabel propertyGraphLabel = propertyGraph.getLabel(labelName);
+
+            if (propertyGraphLabel != null) {
+              ImmutableList.Builder<GraphElementTable.PropertyDefinition>
+                  propertyDefinitionsBuilder = ImmutableList.builder();
+
+              for (String propertyName : propertyGraphLabel.properties) {
+                for (int k = 0; k < propertyDefinitionsArray.length(); k++) {
+                  JSONObject propertyDefinition = propertyDefinitionsArray.getJSONObject(k);
+                  String propertyDeclarationName =
+                      propertyDefinition.getString("propertyDeclarationName");
+
+                  if (propertyName.equals(propertyDeclarationName)) {
+                    PropertyGraph.PropertyDeclaration propertyDeclaration =
+                        propertyGraph.getPropertyDeclaration(propertyDeclarationName);
+                    propertyDefinitionsBuilder.add(
+                        new GraphElementTable.PropertyDefinition(
+                            propertyDeclaration.name,
+                            propertyDefinition.getString("valueExpressionSql")));
+                    break;
+                  }
+                }
+              }
+              ImmutableList<GraphElementTable.PropertyDefinition> propertyDefinitions =
+                  propertyDefinitionsBuilder.build();
+              labelsToPropertyDefinitions.add(
+                  new GraphElementTable.LabelToPropertyDefinitions(labelName, propertyDefinitions));
+            }
+          }
+          graphElementTableBuilder.labelToPropertyDefinitions(
+              ImmutableList.copyOf(labelsToPropertyDefinitions));
+
+          // Add the GraphElementTable to the PropertyGraph builder
+          if (tableType.equals("nodeTables")) {
+            propertyGraphBuilder.addNodeTable(graphElementTableBuilder.autoBuild());
+          } else { // tableType.equals("edgeTables")
+            propertyGraphBuilder.addEdgeTable(graphElementTableBuilder.autoBuild());
+          }
+        }
+        propertyGraph = propertyGraphBuilder.build();
+        builder.addPropertyGraph(propertyGraph);
+
+      } catch (Exception e) {
+        LOG.error("Error parsing {} JSON: {}", tableType, e.getMessage());
+      }
+    }
+  }
+
+  // Helper function to convert JSONArray to List<String>
+  private static List<String> toStringList(JSONArray jsonArray) {
+    List<String> list = new ArrayList<>();
+    for (int i = 0; i < jsonArray.length(); i++) {
+      list.add(jsonArray.getString(i));
+    }
+    return list;
+  }
+
+  private void listPropertyGraphNodeTables(Ddl.Builder builder) {
+    listPropertyGraphTables(builder, "nodeTables");
+  }
+
+  private void listPropertyGraphEdgeTables(Ddl.Builder builder) {
+    listPropertyGraphTables(builder, "edgeTables");
   }
 
   private void listModels(Ddl.Builder builder) {
@@ -1281,27 +1708,163 @@ public class InformationSchemaScanner {
     }
   }
 
+  // TODO: Remove after placements are supported in POSTGRESQL.
+  private boolean placementsSupported() {
+    if (dialect == Dialect.GOOGLE_STANDARD_SQL) {
+      return true;
+    }
+
+    for (String tableName : Arrays.asList("placements", "placement_options")) {
+      try (ResultSet resultSet =
+          context.executeQuery(
+              Statement.of(
+                  "SELECT COUNT(1)"
+                      + " FROM INFORMATION_SCHEMA.TABLES t WHERE "
+                      + " t.TABLE_SCHEMA = 'information_schema'"
+                      + " AND t.TABLE_NAME = '"
+                      + tableName
+                      + "'"))) {
+        resultSet.next();
+        if (resultSet.getLong(0) == 0) {
+          LOG.info(String.join("information_schema.", tableName, "not available"));
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  private void listPlacements(Ddl.Builder builder) {
+    ResultSet resultSet =
+        context.executeQuery(
+            Statement.of(
+                "SELECT p.placement_name, p.is_default, po.option_name, "
+                    + " po.option_type, po.option_value"
+                    + " FROM information_schema.placements AS p"
+                    + " LEFT JOIN information_schema.placement_options AS po"
+                    + " ON p.placement_name = po.placement_name"
+                    + " ORDER BY po.placement_name, po.option_name"));
+
+    Map<String, ImmutableList.Builder<String>> placementNameToOptions = Maps.newHashMap();
+    while (resultSet.next()) {
+      String name = resultSet.getString(0);
+      if (dialect == Dialect.GOOGLE_STANDARD_SQL) {
+        boolean isDefault = resultSet.getBoolean(1);
+        if (isDefault) {
+          // Skip `default` placement as this is not created by user DDL.
+          continue;
+        }
+      } else {
+        String isDefault = resultSet.getString(1);
+        if (isDefault.equals("YES")) {
+          // Skip `default` placement as this is not created by user DDL.
+          continue;
+        }
+      }
+      String optionName = resultSet.getString(2);
+      String optionType = resultSet.getString(3);
+      String optionValue = resultSet.getString(4);
+      LOG.info(
+          "placement option name = "
+              + optionName
+              + ", optionType = "
+              + optionType
+              + ", optionValue = "
+              + optionValue);
+
+      ImmutableList.Builder<String> options =
+          placementNameToOptions.computeIfAbsent(name, k -> ImmutableList.builder());
+
+      if (optionType.equalsIgnoreCase("STRING(MAX)")) {
+        options.add(
+            optionName
+                + "="
+                + GSQL_LITERAL_QUOTE
+                + OPTION_STRING_ESCAPER.escape(optionValue)
+                + GSQL_LITERAL_QUOTE);
+      } else if (optionType.equalsIgnoreCase("character varying")) {
+        options.add(
+            optionName
+                + "="
+                + POSTGRESQL_LITERAL_QUOTE
+                + OPTION_STRING_ESCAPER.escape(optionValue)
+                + POSTGRESQL_LITERAL_QUOTE);
+      } else {
+        options.add(optionName + "=" + optionValue);
+      }
+    }
+
+    for (Map.Entry<String, ImmutableList.Builder<String>> entry :
+        placementNameToOptions.entrySet()) {
+      String placementName = entry.getKey();
+      ImmutableList<String> options = entry.getValue().build();
+      builder.createPlacement(placementName).options(options).endPlacement();
+    }
+  }
+
   private boolean isUnknownType(DescriptorProto descriptor) {
     MessageOptions messageOptions = descriptor.getOptions();
     // 14004 is the extension for placeholder descriptors for unknown types in spanner.
     return messageOptions.getUnknownFields().hasField(14004);
   }
 
+  private Set<String> collectEnumTypes(
+      String rootPackage, List<EnumDescriptorProto> enumDescriptors) {
+    Set<String> enums = new HashSet<>();
+    String typePrefix = rootPackage.isEmpty() ? "" : rootPackage + ".";
+    for (EnumDescriptorProto enumDescriptor : enumDescriptors) {
+      String qualifiedName = typePrefix + enumDescriptor.getName();
+      enums.add(qualifiedName);
+    }
+    return enums;
+  }
+
+  private Set<String> collectAllTypes(String rootPackage, List<DescriptorProto> descriptors) {
+    Set<String> result = new HashSet<>();
+
+    Map<String, DescriptorProto> messageTypes = new HashMap<>();
+    Queue<String> queue = new ArrayDeque<>();
+
+    String typePrefix = rootPackage.isEmpty() ? "" : rootPackage + ".";
+    for (DescriptorProto descriptor : descriptors) {
+      if (isUnknownType(descriptor)) {
+        continue;
+      }
+
+      String qualifiedName = typePrefix + descriptor.getName();
+      if (!messageTypes.containsKey(qualifiedName)) {
+        messageTypes.put(qualifiedName, descriptor);
+        queue.add(qualifiedName);
+      }
+    }
+
+    while (!queue.isEmpty()) {
+      String type = queue.poll();
+      DescriptorProto currentDescriptor = messageTypes.get(type);
+      result.addAll(collectEnumTypes(type, currentDescriptor.getEnumTypeList()));
+
+      for (DescriptorProto child : currentDescriptor.getNestedTypeList()) {
+        if (isUnknownType(child)) {
+          continue;
+        }
+        String childName = type + "." + child.getName();
+        if (!messageTypes.containsKey(childName)) {
+          messageTypes.put(childName, child);
+          queue.add(childName);
+        }
+      }
+    }
+
+    result.addAll(messageTypes.keySet());
+    return result;
+  }
+
   private Set<String> collectBundleTypes(FileDescriptorSet fds) {
     Set<String> result = new HashSet<>();
     for (FileDescriptorProto file : fds.getFileList()) {
-      String filePackage = file.hasPackage() ? file.getPackage() + "." : "";
-      for (DescriptorProto descriptor : file.getMessageTypeList()) {
-        if (isUnknownType(descriptor)) {
-          continue;
-        }
-        String descriptorName = filePackage + descriptor.getName();
-        result.add(descriptorName);
-      }
-      for (EnumDescriptorProto enumDescriptor : file.getEnumTypeList()) {
-        String descriptorName = filePackage + enumDescriptor.getName();
-        result.add(descriptorName);
-      }
+      String filePackage = file.hasPackage() ? file.getPackage() : "";
+      result.addAll(collectAllTypes(filePackage, file.getMessageTypeList()));
+      result.addAll(collectEnumTypes(filePackage, file.getEnumTypeList()));
     }
     return result;
   }

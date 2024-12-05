@@ -21,9 +21,12 @@ import com.google.cloud.teleport.v2.source.reader.io.jdbc.dialectadapter.mysql.M
 import com.google.cloud.teleport.v2.source.reader.io.jdbc.rowmapper.JdbcValueMappingsProvider;
 import com.google.cloud.teleport.v2.source.reader.io.jdbc.rowmapper.provider.MysqlJdbcValueMappings;
 import com.google.cloud.teleport.v2.source.reader.io.schema.typemapping.UnifiedTypeMapper.MapperType;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import java.util.Calendar;
 import org.apache.beam.sdk.util.FluentBackoff;
+import org.joda.time.Duration;
 
 // TODO: Fine-tune the defaults based on benchmarking.
 
@@ -51,10 +54,27 @@ public class MySqlConfigDefaults {
 
   public static final Long DEFAULT_MYSQL_MAX_CONNECTIONS = 160L;
 
-  public static final boolean DEFAULT_MYSQL_AUTO_RECONNECT = true;
+  /**
+   * URL settings for MySQL. allowMultiQueries is required for multi line collation discovery query.
+   * autoReconnect and maxReconnects help to re-establish connection for transient failures.
+   */
+  public static final ImmutableMap<String, String> DEFAULT_MYSQL_URL_PROPERTIES =
+      ImmutableMap.of(
+          "allowMultiQueries", "true",
+          "autoReconnect", "true",
+          "maxReconnects", "10");
 
-  public static final long DEFAULT_MYSQL_RECONNECT_ATTEMPTS = 10L;
-  public static final FluentBackoff DEFAULT_MYSQL_SCHEMA_DISCOVERY_BACKOFF = FluentBackoff.DEFAULT;
+  public static final FluentBackoff DEFAULT_MYSQL_SCHEMA_DISCOVERY_BACKOFF =
+      FluentBackoff.DEFAULT.withMaxCumulativeBackoff(Duration.standardMinutes(5L));
+
+  /** Init Seq for enable ANSI Quotes. * */
+  @VisibleForTesting
+  public static final String ENABLE_ANSI_QUOTES_INIT_SEQ =
+      "SET SESSION sql_mode = \n"
+          + "  CASE \n"
+          + "    WHEN @@sql_mode LIKE '%ANSI_QUOTES%' THEN @@sql_mode \n"
+          + "    ELSE CONCAT(@@sql_mode, ',ANSI_QUOTES') \n"
+          + "  END;";
 
   /**
    * Default Initialization Sequence for the JDBC connection.
@@ -72,10 +92,15 @@ public class MySqlConfigDefaults {
    *       we are also setting the session timezone to UTC.
    * </ol>
    */
-  // TODO: make the innodb_parallel_read_threads as a config option, no need to set if defaults are
-  // correct.
+  // TODO: Add innodb_parallel_read_threads for better performance tuning.
   public static final ImmutableList<String> DEFAULT_MYSQL_INIT_SEQ =
-      ImmutableList.of("SET TIME_ZONE = 'UTC'", "SET SESSION innodb_parallel_read_threads=32");
+      ImmutableList.of(
+          // Using an offset of 0 instead of UTC, as it's possible for a customer's database to not
+          // have named timezone information pre-installed.
+          "SET TIME_ZONE = '+00:00'",
+          "SET SESSION NET_WRITE_TIMEOUT=1200",
+          "SET SESSION NET_READ_TIMEOUT=1200",
+          ENABLE_ANSI_QUOTES_INIT_SEQ);
 
   private MySqlConfigDefaults() {}
 }

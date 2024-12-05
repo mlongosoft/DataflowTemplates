@@ -23,6 +23,7 @@ import com.google.cloud.teleport.v2.common.UncaughtExceptionLogger;
 import com.google.cloud.teleport.v2.kafka.dlq.BigQueryDeadLetterQueue;
 import com.google.cloud.teleport.v2.kafka.transforms.AvroDynamicTransform;
 import com.google.cloud.teleport.v2.kafka.transforms.AvroTransform;
+import com.google.cloud.teleport.v2.kafka.transforms.KafkaRecordErrorConverters.WriteKafkaRecordMessageErrors;
 import com.google.cloud.teleport.v2.kafka.transforms.KafkaTransform;
 import com.google.cloud.teleport.v2.kafka.utils.KafkaConfig;
 import com.google.cloud.teleport.v2.kafka.utils.KafkaTopicUtils;
@@ -31,12 +32,12 @@ import com.google.cloud.teleport.v2.kafka.values.KafkaTemplateParameters.SchemaF
 import com.google.cloud.teleport.v2.options.KafkaToBigQueryFlexOptions;
 import com.google.cloud.teleport.v2.transforms.BigQueryWriteUtils;
 import com.google.cloud.teleport.v2.transforms.ErrorConverters;
-import com.google.cloud.teleport.v2.transforms.ErrorConverters.WriteKafkaMessageErrors;
 import com.google.cloud.teleport.v2.transforms.StringMessageToTableRow;
 import com.google.cloud.teleport.v2.utils.BigQueryIOUtils;
 import com.google.cloud.teleport.v2.utils.MetadataValidator;
 import com.google.cloud.teleport.v2.utils.SchemaUtils;
 import com.google.cloud.teleport.v2.values.FailsafeElement;
+import com.google.common.base.Strings;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -45,7 +46,6 @@ import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineResult;
 import org.apache.beam.sdk.coders.ByteArrayCoder;
 import org.apache.beam.sdk.coders.CoderRegistry;
-import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.coders.NullableCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
@@ -64,7 +64,6 @@ import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.errorhandling.BadRecord;
 import org.apache.beam.sdk.transforms.errorhandling.BadRecordRouter;
 import org.apache.beam.sdk.transforms.errorhandling.ErrorHandler;
-import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionList;
 import org.apache.beam.sdk.values.PCollectionTuple;
@@ -120,7 +119,7 @@ public class KafkaToBigQueryFlex {
   public static final TupleTag<TableRow> TRANSFORM_OUT = new TupleTag<>() {};
 
   /** The tag for the dead-letter output of the json to table row transform. */
-  public static final TupleTag<FailsafeElement<KV<String, String>, String>>
+  public static final TupleTag<FailsafeElement<KafkaRecord<String, String>, String>>
       TRANSFORM_DEADLETTER_OUT = new TupleTag<>() {};
 
   /** String/String Coder for FailsafeElement. */
@@ -461,6 +460,12 @@ public class KafkaToBigQueryFlex {
       throw new IllegalArgumentException(
           "Schema Registry Connection URL or Avro schema is needed in order to read confluent wire format messages.");
     }
+    if (!Strings.isNullOrEmpty(options.getJavascriptTextTransformGcsPath())
+        && !Strings.isNullOrEmpty(options.getJavascriptTextTransformFunctionName())) {
+      LOG.warn(
+          "JavaScript UDF parameters are set while using Avro message format. "
+              + "UDFs are supported for JSON format only. No UDF transformation will be applied.");
+    }
 
     PCollection<KafkaRecord<byte[], byte[]>> kafkaRecords;
 
@@ -476,8 +481,7 @@ public class KafkaToBigQueryFlex {
             .setCoder(
                 KafkaRecordCoder.of(NullableCoder.of(ByteArrayCoder.of()), ByteArrayCoder.of()));
 
-    WriteResult writeResult = null;
-    writeResult = processKafkaRecords(kafkaRecords, options);
+    WriteResult writeResult = processKafkaRecords(kafkaRecords, options);
     return pipeline;
   }
 
@@ -489,9 +493,9 @@ public class KafkaToBigQueryFlex {
       Map<String, Object> kafkaConfig) {
 
     // Register the coder for pipeline
-    FailsafeElementCoder<KV<String, String>, String> coder =
+    FailsafeElementCoder<KafkaRecord<String, String>, String> coder =
         FailsafeElementCoder.of(
-            KvCoder.of(
+            KafkaRecordCoder.of(
                 NullableCoder.of(StringUtf8Coder.of()), NullableCoder.of(StringUtf8Coder.of())),
             NullableCoder.of(StringUtf8Coder.of()));
 
@@ -507,16 +511,21 @@ public class KafkaToBigQueryFlex {
             .apply(
                 "ReadFromKafka",
                 KafkaTransform.readStringFromKafka(
-                    bootstrapServers,
-                    topicsList,
-                    kafkaConfig,
-                    null,
-                    options.getEnableCommitOffsets()))
+                    bootstrapServers, topicsList, kafkaConfig, options.getEnableCommitOffsets()))
 
             /*
              * Step #2: Transform the Kafka Messages into TableRows
              */
-            .apply("ConvertMessageToTableRow", new StringMessageToTableRow());
+            .apply(
+                "ConvertMessageToTableRow",
+                StringMessageToTableRow.newBuilder()
+                    .setFileSystemPath(options.getJavascriptTextTransformGcsPath())
+                    .setFunctionName(options.getJavascriptTextTransformFunctionName())
+                    .setReloadIntervalMinutes(
+                        options.getJavascriptTextTransformReloadIntervalMinutes())
+                    .setSuccessTag(TRANSFORM_OUT)
+                    .setFailureTag(TRANSFORM_DEADLETTER_OUT)
+                    .build());
     /*
      * Step #3: Write the successful records out to BigQuery
      */
@@ -553,7 +562,7 @@ public class KafkaToBigQueryFlex {
           .apply("Flatten", Flatten.pCollections())
           .apply(
               "WriteTransformationFailedRecords",
-              WriteKafkaMessageErrors.newBuilder()
+              WriteKafkaRecordMessageErrors.newBuilder()
                   .setErrorRecordsTable(
                       ObjectUtils.firstNonNull(options.getOutputDeadletterTable()))
                   .setErrorRecordsTableSchema(SchemaUtils.DEADLETTER_SCHEMA)

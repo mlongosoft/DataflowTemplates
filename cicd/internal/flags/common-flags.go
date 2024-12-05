@@ -22,14 +22,33 @@ import (
 )
 
 const (
-	ALL     = "ALL"
+	ALL     = "ALL"     // All modules
+	DEFAULT = "DEFAULT" // Modules other than those excluded
+	KAFKA   = "KAFKA"
 	SPANNER = "SPANNER"
 )
 
 // Avoid making these vars public.
 var (
 	modulesToBuild string
-	moduleMap      = map[string]string{ALL: "", SPANNER: "v2/datastream-to-spanner/,v2/spanner-change-streams-to-sharded-file-sink/,v2/gcs-to-sourcedb/,v2/sourcedb-to-spanner/,v2/spanner-custom-shard,plugins/templates-maven-plugin"}
+	moduleMap      = map[string][]string{
+		ALL:     {},
+		DEFAULT: {},
+		KAFKA: {"v2/kafka-common/",
+			"v2/kafka-to-bigquery/",
+			"v2/kafka-to-gcs/",
+			"v2/kafka-to-kafka/",
+			"v2/kafka-to-pubsub/",
+			"plugins/templates-maven-plugin",
+		},
+		SPANNER: {"v2/datastream-to-spanner/",
+			"v2/spanner-change-streams-to-sharded-file-sink/",
+			"v2/gcs-to-sourcedb/",
+			"v2/sourcedb-to-spanner/",
+			"v2/spanner-to-sourcedb/",
+			"v2/spanner-custom-shard",
+			"plugins/templates-maven-plugin"},
+	}
 )
 
 // Registers all common flags. Must be called before flag.Parse().
@@ -40,8 +59,21 @@ func RegisterCommonFlags() {
 // Returns all modules to build.
 func ModulesToBuild() []string {
 	m := modulesToBuild
-	if val, ok := moduleMap[modulesToBuild]; ok {
-		m = val
+	if m == "DEFAULT" {
+		// "DEFAULT" is "ALL" minus other modules defined in moduleMap
+		var s []string
+		for k, v := range moduleMap {
+			if k != "ALL" && k != "DEFAULT" {
+				for _, n := range v {
+					if !(strings.HasPrefix(n, "plugins/") || strings.Contains(n, "common/")) {
+						s = append(s, "!"+n)
+					}
+				}
+			}
+		}
+		return s
+	} else if val, ok := moduleMap[modulesToBuild]; ok {
+		return val
 	}
 	if len(m) == 0 {
 		return make([]string, 0)

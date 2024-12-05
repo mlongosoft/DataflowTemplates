@@ -93,92 +93,92 @@ public class DataStreamToSQL {
     private static final String AVRO_SUFFIX = "avro";
     private static final String JSON_SUFFIX = "json";
 
-    /**
-     * Options supported by the pipeline.
-     *
-     * <p>Inherits standard configuration options.
-     */
-    public interface Options extends PipelineOptions, StreamingOptions {
-        @TemplateParameter.Text(
-                order = 1,
-                groupName = "Source",
-                description = "File location for Datastream file input in Cloud Storage.",
-                helpText =
-                        "The file location for the Datastream files in Cloud Storage to replicate. This file location is typically the root path for the stream.")
-        String getInputFilePattern();
+  /**
+   * Options supported by the pipeline.
+   *
+   * <p>Inherits standard configuration options.
+   */
+  public interface Options extends PipelineOptions, StreamingOptions {
+    @TemplateParameter.GcsReadFile(
+        order = 1,
+        groupName = "Source",
+        description = "File location for Datastream file input in Cloud Storage.",
+        helpText =
+            "The file location for the Datastream files in Cloud Storage to replicate. This file location is typically the root path for the stream.")
+    String getInputFilePattern();
 
         void setInputFilePattern(String value);
 
-        @TemplateParameter.PubsubSubscription(
-                order = 2,
-                optional = true,
-                description = "The Pub/Sub subscription being used in a Cloud Storage notification policy.",
-                helpText =
-                        "The Pub/Sub subscription with Datastream file notifications."
-                                + " For example, `projects/<PROJECT_ID>/subscriptions/<SUBSCRIPTION_ID>`.")
-        String getGcsPubSubSubscription();
+    @TemplateParameter.PubsubSubscription(
+        order = 2,
+        optional = true,
+        description = "The Pub/Sub subscription being used in a Cloud Storage notification policy.",
+        helpText =
+            "The Pub/Sub subscription with Datastream file notifications."
+                + " For example, `projects/<PROJECT_ID>/subscriptions/<SUBSCRIPTION_ID>`.")
+    String getGcsPubSubSubscription();
 
-        void setGcsPubSubSubscription(String value);
+    void setGcsPubSubSubscription(String value);
 
-        @TemplateParameter.Enum(
-                order = 3,
-                enumOptions = {@TemplateEnumOption("avro"), @TemplateEnumOption("json")},
-                optional = true,
-                description = "Datastream output file format (avro/json).",
-                helpText =
-                        "The format of the output file produced by Datastream. For example, `avro` or `json`. Defaults to `avro`.")
-        @Default.String("avro")
-        String getInputFileFormat();
+    @TemplateParameter.Enum(
+        order = 3,
+        enumOptions = {@TemplateEnumOption("avro"), @TemplateEnumOption("json")},
+        optional = true,
+        description = "Datastream output file format (avro/json).",
+        helpText =
+            "The format of the output file produced by Datastream. For example, `avro` or `json`. Defaults to `avro`.")
+    @Default.String("avro")
+    String getInputFileFormat();
 
-        void setInputFileFormat(String value);
+    void setInputFileFormat(String value);
 
-        @TemplateParameter.Text(
-                order = 4,
-                groupName = "Source",
-                optional = true,
-                description = "Name or template for the stream to poll for schema information.",
-                helpText =
-                        "The name or template for the stream to poll for schema information. The default value is `{_metadata_stream}`.")
-        String getStreamName();
+    @TemplateParameter.Text(
+        order = 4,
+        groupName = "Source",
+        optional = true,
+        description = "Name or template for the stream to poll for schema information.",
+        helpText =
+            "The name or template for the stream to poll for schema information. The default value is `{_metadata_stream}`.")
+    String getStreamName();
 
-        void setStreamName(String value);
+    void setStreamName(String value);
 
-        @TemplateParameter.DateTime(
-                order = 5,
-                optional = true,
-                description =
-                        "The starting DateTime used to fetch from Cloud Storage "
-                                + "(https://tools.ietf.org/html/rfc3339).",
-                helpText =
-                        "The starting DateTime used to fetch from Cloud Storage "
-                                + "(https://tools.ietf.org/html/rfc3339).")
-        @Default.String("1970-01-01T00:00:00Z")
-        String getRfcStartDateTime();
+    @TemplateParameter.DateTime(
+        order = 5,
+        optional = true,
+        description =
+            "The starting DateTime used to fetch from Cloud Storage "
+                + "(https://tools.ietf.org/html/rfc3339).",
+        helpText =
+            "The starting DateTime used to fetch from Cloud Storage "
+                + "(https://tools.ietf.org/html/rfc3339).")
+    @Default.String("1970-01-01T00:00:00.00Z")
+    String getRfcStartDateTime();
 
-        void setRfcStartDateTime(String value);
+    void setRfcStartDateTime(String value);
 
-        // DataStream API Root Url (only used for testing)
-        @TemplateParameter.Text(
-                order = 6,
-                optional = true,
-                description = "Datastream API Root URL (only required for testing)",
-                helpText = "Datastream API Root URL")
-        @Default.String("https://datastream.googleapis.com/")
-        String getDataStreamRootUrl();
+    // DataStream API Root Url (only used for testing)
+    @TemplateParameter.Text(
+        order = 6,
+        optional = true,
+        description = "Datastream API Root URL (only required for testing)",
+        helpText = "Datastream API Root URL")
+    @Default.String("https://datastream.googleapis.com/")
+    String getDataStreamRootUrl();
 
-        void setDataStreamRootUrl(String value);
+    void setDataStreamRootUrl(String value);
 
-        // SQL Connection Parameters
-        @TemplateParameter.Enum(
-                order = 7,
-                optional = true,
-                enumOptions = {@TemplateEnumOption("postgres"), @TemplateEnumOption("mysql"), @TemplateEnumOption("oracle")},
-                description = "SQL Database Type (postgres or mysql).",
-                helpText = "The database type to write to (for example, Postgres).")
-        @Default.String("postgres")
-        String getDatabaseType();
+    // SQL Connection Parameters
+    @TemplateParameter.Enum(
+        order = 7,
+        optional = true,
+        enumOptions = {@TemplateEnumOption("postgres"), @TemplateEnumOption("mysql")},
+        description = "SQL Database Type (postgres or mysql).",
+        helpText = "The database type to write to (for example, Postgres).")
+    @Default.String("postgres")
+    String getDatabaseType();
 
-        void setDatabaseType(String value);
+    void setDatabaseType(String value);
 
         @TemplateParameter.Text(
                 order = 8,
@@ -187,7 +187,7 @@ public class DataStreamToSQL {
                 helpText = "(description=(retry_count=)(retry_delay=)(address=(protocol=(()()())(connect_data=....")
         String getDatabaseHost();
 
-        void setDatabaseHost(String value);
+    void setDatabaseHost(String value);
 
         @TemplateParameter.Text(
                 order = 9,
@@ -198,16 +198,16 @@ public class DataStreamToSQL {
         @Default.String("")
         String getDatabasePort();
 
-        void setDatabasePort(String value);
+    void setDatabasePort(String value);
 
-        @TemplateParameter.Text(
-                order = 10,
-                description = "Database User to connect with.",
-                helpText =
-                        "The SQL user with all required permissions to write to all tables in replication.")
-        String getDatabaseUser();
+    @TemplateParameter.Text(
+        order = 10,
+        description = "Database User to connect with.",
+        helpText =
+            "The SQL user with all required permissions to write to all tables in replication.")
+    String getDatabaseUser();
 
-        void setDatabaseUser(String value);
+    void setDatabaseUser(String value);
 
         @TemplateParameter.Password(
                 order = 11,

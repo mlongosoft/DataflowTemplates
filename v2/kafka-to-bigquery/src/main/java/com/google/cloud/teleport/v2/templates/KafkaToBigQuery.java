@@ -28,7 +28,7 @@ import com.google.cloud.teleport.v2.templates.KafkaToBigQuery.KafkaToBQOptions;
 import com.google.cloud.teleport.v2.transforms.BigQueryConverters;
 import com.google.cloud.teleport.v2.transforms.BigQueryConverters.FailsafeJsonToTableRow;
 import com.google.cloud.teleport.v2.transforms.ErrorConverters;
-import com.google.cloud.teleport.v2.transforms.ErrorConverters.WriteKafkaMessageErrors;
+import com.google.cloud.teleport.v2.transforms.ErrorConverters.WriteStringKVMessageErrors;
 import com.google.cloud.teleport.v2.transforms.JavascriptTextTransformer.FailsafeJavascriptUdf;
 import com.google.cloud.teleport.v2.transforms.JavascriptTextTransformer.JavascriptTextTransformerOptions;
 import com.google.cloud.teleport.v2.utils.BigQueryIOUtils;
@@ -396,8 +396,8 @@ public class KafkaToBigQuery {
              */
             .apply(
                 "ReadFromKafka",
-                KafkaTransform.readStringFromKafka(
-                    bootstrapServers, topicsList, kafkaConfig, null, false))
+                KafkaTransform.readStringFromKafka(bootstrapServers, topicsList, kafkaConfig, false)
+                    .withoutMetadata())
 
             /*
              * Step #2: Transform the Kafka Messages into TableRows
@@ -439,7 +439,7 @@ public class KafkaToBigQuery {
         .apply("Flatten", Flatten.pCollections())
         .apply(
             "WriteTransformationFailedRecords",
-            WriteKafkaMessageErrors.newBuilder()
+            WriteStringKVMessageErrors.newBuilder()
                 .setErrorRecordsTable(
                     ObjectUtils.firstNonNull(
                         options.getOutputDeadletterTable(),
@@ -482,7 +482,7 @@ public class KafkaToBigQuery {
             .apply(
                 "ReadFromKafka",
                 KafkaTransform.readAvroFromKafka(
-                    bootstrapServers, topicsList, kafkaConfig, avroSchema, null))
+                    bootstrapServers, topicsList, kafkaConfig, avroSchema, false))
             .setCoder(
                 KvCoder.of(
                     ByteArrayCoder.of(),
@@ -546,7 +546,7 @@ public class KafkaToBigQuery {
           .apply("Flatten", Flatten.pCollections())
           .apply(
               "WriteTransformationFailedRecords",
-              WriteKafkaMessageErrors.newBuilder()
+              WriteStringKVMessageErrors.newBuilder()
                   .setErrorRecordsTable(
                       ObjectUtils.firstNonNull(
                           options.getOutputDeadletterTable(),

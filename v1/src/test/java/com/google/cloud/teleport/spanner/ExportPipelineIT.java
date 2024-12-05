@@ -34,23 +34,23 @@ import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.it.common.PipelineLauncher;
 import org.apache.beam.it.common.PipelineOperator;
 import org.apache.beam.it.common.utils.ResourceManagerUtils;
-import org.apache.beam.it.gcp.TemplateTestBase;
 import org.apache.beam.it.gcp.artifacts.Artifact;
 import org.apache.beam.it.gcp.artifacts.utils.AvroTestUtil;
 import org.apache.beam.it.gcp.spanner.SpannerResourceManager;
+import org.apache.beam.it.gcp.spanner.SpannerTemplateITBase;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.commons.lang3.RandomUtils;
 import org.junit.After;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
+import org.junit.runners.Parameterized;
 
 /** Integration test for {@link ExportPipeline Spanner to GCS Avro} template. */
 @Category(TemplateIntegrationTest.class)
 @TemplateIntegrationTest(ExportPipeline.class)
-@RunWith(JUnit4.class)
-public class ExportPipelineIT extends TemplateTestBase {
+@RunWith(Parameterized.class)
+public class ExportPipelineIT extends SpannerTemplateITBase {
 
   private static final int MESSAGES_COUNT = 100;
 
@@ -141,6 +141,7 @@ public class ExportPipelineIT extends TemplateTestBase {
                   + "    }"
                   + "  ]"
                   + "}");
+
   private SpannerResourceManager spannerResourceManager;
 
   @After
@@ -153,16 +154,7 @@ public class ExportPipelineIT extends TemplateTestBase {
     spannerResourceManager =
         SpannerResourceManager.builder(testName, PROJECT, REGION, Dialect.GOOGLE_STANDARD_SQL)
             .maybeUseStaticInstance()
-            .build();
-    testSpannerToGCSAvroBase(Function.identity());
-  }
-
-  @Test
-  public void testSpannerToGCSAvroStaging() throws IOException {
-    spannerResourceManager =
-        SpannerResourceManager.builder(testName, PROJECT, REGION, Dialect.GOOGLE_STANDARD_SQL)
-            .maybeUseStaticInstance()
-            .maybeUseCustomHost()
+            .useCustomHost(spannerHost)
             .build();
     testSpannerToGCSAvroBase(
         paramAdder ->
@@ -185,6 +177,8 @@ public class ExportPipelineIT extends TemplateTestBase {
                 + "  FirstName String(1024),\n"
                 + "  LastName String(1024),\n"
                 + "  Rating FLOAT32,\n"
+                + "  Review String(MAX),\n"
+                + "  `MyTokens` TOKENLIST AS (TOKENIZE_FULLTEXT(Review)) HIDDEN,\n"
                 + ") PRIMARY KEY(Id)",
             testName);
     String createModelStructStatement =
@@ -194,10 +188,17 @@ public class ExportPipelineIT extends TemplateTestBase {
                 + " OUTPUT (embeddings STRUCT<statistics STRUCT<truncated BOOL, token_count FLOAT64>, values ARRAY<FLOAT64>>) \n"
                 + " REMOTE OPTIONS (endpoint=\"//aiplatform.googleapis.com/projects/span-cloud-testing/locations/us-central1/publishers/google/models/textembedding-gecko\")",
             testName);
+    String createSearchIndexStatement =
+        String.format(
+            "CREATE SEARCH INDEX `%s_SearchIndex`\n"
+                + " ON `%s_Singers`(`MyTokens`)\n"
+                + " OPTIONS (sort_order_sharding=TRUE)",
+            testName, testName);
 
     spannerResourceManager.executeDdlStatement(createEmptyTableStatement);
     spannerResourceManager.executeDdlStatement(createSingersTableStatement);
     spannerResourceManager.executeDdlStatement(createModelStructStatement);
+    spannerResourceManager.executeDdlStatement(createSearchIndexStatement);
     List<Mutation> expectedData = generateTableRows(String.format("%s_Singers", testName));
     spannerResourceManager.write(expectedData);
     PipelineLauncher.LaunchConfig.Builder options =
@@ -226,6 +227,10 @@ public class ExportPipelineIT extends TemplateTestBase {
         gcsClient.listArtifacts(
             "output/",
             Pattern.compile(String.format(".*/%s_%s.*\\.avro.*", testName, "ModelStruct")));
+    List<Artifact> searchIndexArtifacts =
+        gcsClient.listArtifacts(
+            "output/",
+            Pattern.compile(String.format(".*/%s_%s.*\\.avro.*", testName, "SearchIndex")));
     assertThat(singersArtifacts).isNotEmpty();
     assertThat(emptyArtifacts).isNotEmpty();
     assertThat(modelStructArtifacts).isNotEmpty();
@@ -246,16 +251,7 @@ public class ExportPipelineIT extends TemplateTestBase {
     spannerResourceManager =
         SpannerResourceManager.builder(testName, PROJECT, REGION, Dialect.POSTGRESQL)
             .maybeUseStaticInstance()
-            .build();
-    testPostgresSpannerToGCSAvroBase(Function.identity());
-  }
-
-  @Test
-  public void testPostgresSpannerToGCSAvroStaging() throws IOException {
-    spannerResourceManager =
-        SpannerResourceManager.builder(testName, PROJECT, REGION, Dialect.POSTGRESQL)
-            .maybeUseStaticInstance()
-            .maybeUseCustomHost()
+            .useCustomHost(spannerHost)
             .build();
     testPostgresSpannerToGCSAvroBase(
         paramAdder ->

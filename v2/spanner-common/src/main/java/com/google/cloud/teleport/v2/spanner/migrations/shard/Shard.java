@@ -28,7 +28,9 @@ public class Shard implements Serializable {
   private String user;
   private String password;
   private String dbName;
+  private String namespace;
   private String secretManagerUri;
+  private String connectionProperties;
 
   private Map<String, String> dbNameToLogicalShardIdMap = new HashMap<>();
 
@@ -39,14 +41,18 @@ public class Shard implements Serializable {
       String user,
       String password,
       String dbName,
-      String secretManagerUri) {
+      String namespace,
+      String secretManagerUri,
+      String connectionProperties) {
     this.logicalShardId = logicalShardId;
     this.host = host;
     this.port = port;
     this.user = user;
     this.password = password;
     this.dbName = dbName;
+    this.namespace = namespace;
     this.secretManagerUri = secretManagerUri;
+    this.connectionProperties = connectionProperties;
   }
 
   public Shard() {}
@@ -99,12 +105,28 @@ public class Shard implements Serializable {
     this.dbName = input;
   }
 
+  public String getNamespace() {
+    return namespace;
+  }
+
+  public void setNamespace(String namespace) {
+    this.namespace = namespace;
+  }
+
   public String getSecretManagerUri() {
     return secretManagerUri;
   }
 
   public void setSecretManagerUri(String input) {
     this.secretManagerUri = input;
+  }
+
+  public String getConnectionProperties() {
+    return connectionProperties;
+  }
+
+  public void setConnectionProperties(String input) {
+    this.connectionProperties = input;
   }
 
   public Map<String, String> getDbNameToLogicalShardIdMap() {
@@ -129,6 +151,12 @@ public class Shard implements Serializable {
         + ", dbName='"
         + dbName
         + '\''
+        + ", namespace='"
+        + namespace
+        + '\''
+        + ", connectionProperties='"
+        + connectionProperties
+        + '\''
         + ", dbNameToLogicalShardIdMap="
         + dbNameToLogicalShardIdMap
         + '}';
@@ -149,6 +177,8 @@ public class Shard implements Serializable {
         && Objects.equals(user, shard.user)
         && Objects.equals(password, shard.password)
         && Objects.equals(dbName, shard.dbName)
+        && Objects.equals(namespace, shard.namespace)
+        && Objects.equals(connectionProperties, shard.connectionProperties)
         && Objects.equals(secretManagerUri, shard.secretManagerUri)
         && Objects.equals(dbNameToLogicalShardIdMap, shard.dbNameToLogicalShardIdMap);
   }
@@ -162,6 +192,8 @@ public class Shard implements Serializable {
         user,
         password,
         dbName,
+        namespace,
+        connectionProperties,
         secretManagerUri,
         dbNameToLogicalShardIdMap);
   }

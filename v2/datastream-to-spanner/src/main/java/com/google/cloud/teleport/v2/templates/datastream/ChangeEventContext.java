@@ -19,7 +19,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.google.cloud.spanner.Key;
 import com.google.cloud.spanner.Mutation;
 import com.google.cloud.teleport.v2.spanner.ddl.Ddl;
+import com.google.cloud.teleport.v2.spanner.migrations.convertors.ChangeEventSpannerConvertor;
 import com.google.cloud.teleport.v2.spanner.migrations.exceptions.ChangeEventConvertorException;
+import com.google.cloud.teleport.v2.spanner.migrations.exceptions.DroppedTableException;
 import com.google.cloud.teleport.v2.spanner.migrations.exceptions.InvalidChangeEventException;
 import java.util.Arrays;
 import org.slf4j.Logger;
@@ -59,10 +61,15 @@ public abstract class ChangeEventContext {
 
   // Helper method to convert change event to mutation.
   protected void convertChangeEventToMutation(Ddl ddl)
-      throws ChangeEventConvertorException, InvalidChangeEventException {
+      throws ChangeEventConvertorException, InvalidChangeEventException, DroppedTableException {
     ChangeEventConvertor.convertChangeEventColumnKeysToLowerCase(changeEvent);
     ChangeEventConvertor.verifySpannerSchema(ddl, changeEvent);
-    this.primaryKey = ChangeEventConvertor.changeEventToPrimaryKey(ddl, changeEvent);
+    this.primaryKey =
+        ChangeEventSpannerConvertor.changeEventToPrimaryKey(
+            changeEvent.get(DatastreamConstants.EVENT_TABLE_NAME_KEY).asText(),
+            ddl,
+            changeEvent,
+            /* convertNameToLowerCase= */ true);
     this.dataMutation = ChangeEventConvertor.changeEventToMutation(ddl, changeEvent);
     this.shadowTableMutation = generateShadowTableMutation(ddl);
   }

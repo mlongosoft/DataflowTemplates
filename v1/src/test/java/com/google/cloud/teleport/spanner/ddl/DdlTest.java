@@ -31,6 +31,9 @@ import static org.junit.Assert.assertTrue;
 import com.google.cloud.spanner.Dialect;
 import com.google.cloud.teleport.spanner.common.Type;
 import com.google.cloud.teleport.spanner.ddl.ForeignKey.ReferentialAction;
+import com.google.cloud.teleport.spanner.ddl.GraphElementTable.GraphNodeTableReference;
+import com.google.cloud.teleport.spanner.ddl.GraphElementTable.LabelToPropertyDefinitions;
+import com.google.cloud.teleport.spanner.ddl.GraphElementTable.PropertyDefinition;
 import com.google.cloud.teleport.spanner.ddl.IndexColumn.IndexColumnsBuilder;
 import com.google.cloud.teleport.spanner.ddl.IndexColumn.Order;
 import com.google.cloud.teleport.spanner.proto.ExportProtos.Export;
@@ -39,6 +42,7 @@ import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import org.junit.Test;
@@ -96,6 +100,11 @@ public class DdlTest {
         .generatedAs("CONCAT(first_name, ' ', last_name)")
         .stored()
         .endColumn()
+        .column("HiddenColumn")
+        .type(Type.string())
+        .max()
+        .isHidden(true)
+        .endColumn()
         .primaryKey()
         .asc("id")
         .asc("gen_id")
@@ -109,7 +118,11 @@ public class DdlTest {
                 "ALTER TABLE `Users` ADD CONSTRAINT `fk` FOREIGN KEY (`first_name`)"
                     + " REFERENCES `AllowedNames` (`first_name`)",
                 "ALTER TABLE `Users` ADD CONSTRAINT `fk_odc` FOREIGN KEY (`last_name`)"
-                    + " REFERENCES `AllowedNames` (`last_name`) ON DELETE CASCADE"))
+                    + " REFERENCES `AllowedNames` (`last_name`) ON DELETE CASCADE",
+                "ALTER TABLE `Users` ADD CONSTRAINT `fk_not_enforced_no_action` FOREIGN KEY (`last_name`) "
+                    + "  REFERENCES `AllowedNames` (`last_name`) ON DELETE NO ACTION NOT ENFORCED",
+                "ALTER TABLE `Users` ADD CONSTRAINT `fk_enforced` FOREIGN KEY (`last_name`) "
+                    + "  REFERENCES `AllowedNames` (`last_name`) ENFORCED"))
         .checkConstraints(ImmutableList.of("CONSTRAINT `ck` CHECK (`first_name` != `last_name`)"))
         .endTable();
     Export export =
@@ -133,6 +146,7 @@ public class DdlTest {
                 + " `first_name` STRING(10) DEFAULT ('John'),"
                 + " `last_name` STRING(MAX),"
                 + " `full_name` STRING(MAX) AS (CONCAT(first_name, ' ', last_name)) STORED,"
+                + " `HiddenColumn`                          STRING(MAX) HIDDEN,"
                 + " CONSTRAINT `ck` CHECK (`first_name` != `last_name`),"
                 + " ) PRIMARY KEY (`id` ASC, `gen_id` ASC)"
                 + " CREATE INDEX `UsersByFirstName` ON `Users` (`first_name`)"
@@ -140,9 +154,15 @@ public class DdlTest {
                 + " ALTER TABLE `Users` ADD CONSTRAINT `fk` FOREIGN KEY (`first_name`)"
                 + " REFERENCES `AllowedNames` (`first_name`)"
                 + " ALTER TABLE `Users` ADD CONSTRAINT `fk_odc` FOREIGN KEY (`last_name`)"
-                + " REFERENCES `AllowedNames` (`last_name`) ON DELETE CASCADE"));
+                + " REFERENCES `AllowedNames` (`last_name`) ON DELETE CASCADE"
+                + " ALTER TABLE `Users` ADD CONSTRAINT `fk_not_enforced_no_action`"
+                + " FOREIGN KEY (`last_name`) REFERENCES "
+                + "`AllowedNames` (`last_name`) ON DELETE NO ACTION NOT ENFORCED"
+                + " ALTER TABLE `Users` ADD CONSTRAINT `fk_enforced`"
+                + " FOREIGN KEY (`last_name`) REFERENCES "
+                + "`AllowedNames` (`last_name`) ENFORCED"));
     List<String> statements = ddl.statements();
-    assertEquals(6, statements.size());
+    assertEquals(8, statements.size());
     assertThat(
         statements.get(0),
         equalToCompressingWhiteSpace(
@@ -152,6 +172,7 @@ public class DdlTest {
                 + " `first_name` STRING(10) DEFAULT ('John'),"
                 + " `last_name` STRING(MAX),"
                 + " `full_name` STRING(MAX) AS (CONCAT(first_name, ' ', last_name)) STORED,"
+                + " `HiddenColumn`                          STRING(MAX) HIDDEN,"
                 + " CONSTRAINT `ck` CHECK (`first_name` != `last_name`),"
                 + " ) PRIMARY KEY (`id` ASC, `gen_id` ASC)"));
     assertThat(
@@ -171,8 +192,21 @@ public class DdlTest {
         equalToCompressingWhiteSpace(
             "ALTER TABLE `Users` ADD CONSTRAINT `fk_odc` FOREIGN KEY (`last_name`) REFERENCES"
                 + " `AllowedNames` (`last_name`) ON DELETE CASCADE"));
+
     assertThat(
         statements.get(5),
+        equalToCompressingWhiteSpace(
+            "ALTER TABLE `Users` ADD CONSTRAINT `fk_not_enforced_no_action`"
+                + " FOREIGN KEY (`last_name`) REFERENCES "
+                + "`AllowedNames` (`last_name`) ON DELETE NO ACTION NOT ENFORCED"));
+    assertThat(
+        statements.get(6),
+        equalToCompressingWhiteSpace(
+            "ALTER TABLE `Users` ADD CONSTRAINT `fk_enforced`"
+                + " FOREIGN KEY (`last_name`) REFERENCES "
+                + "`AllowedNames` (`last_name`) ENFORCED"));
+    assertThat(
+        statements.get(7),
         equalToCompressingWhiteSpace(
             "ALTER DATABASE `%db_name%` SET OPTIONS ( version_retention_period = \"4d\" )"));
     assertNotNull(ddl.hashCode());
@@ -500,6 +534,108 @@ public class DdlTest {
   }
 
   @Test
+  public void testIndex() {
+    Index.Builder builder =
+        Index.builder(Dialect.GOOGLE_STANDARD_SQL)
+            .name("user_index")
+            .table("User")
+            .unique()
+            .filter("`first_name` IS NOT NULL AND `last_name` IS NOT NULL");
+    builder
+        .columns()
+        .create()
+        .name("first_name")
+        .asc()
+        .endIndexColumn()
+        .create()
+        .name("last_name")
+        .desc()
+        .endIndexColumn()
+        .create()
+        .name("full_name")
+        .storing()
+        .endIndexColumn()
+        .end();
+    Index index = builder.build();
+    assertThat(
+        index.prettyPrint(),
+        equalToCompressingWhiteSpace(
+            "CREATE UNIQUE INDEX `user_index` ON `User`(`first_name` ASC,"
+                + " `last_name` DESC) STORING (`full_name`) WHERE `first_name` IS"
+                + " NOT NULL AND `last_name` IS NOT NULL"));
+    assertTrue(index.equals(index));
+    assertFalse(index.equals(Boolean.TRUE));
+    builder = index.autoToBuilder();
+    builder
+        .columns()
+        .create()
+        .name("first_name")
+        .asc()
+        .endIndexColumn()
+        .create()
+        .name("last_name")
+        .desc()
+        .endIndexColumn()
+        .create()
+        .name("full_name")
+        .storing()
+        .endIndexColumn()
+        .end();
+    Index index1 = builder.build();
+    assertTrue(index.equals(index1));
+    assertNotNull(index.hashCode());
+  }
+
+  @Test
+  public void testSearchIndex() {
+    Index.Builder builder =
+        Index.builder(Dialect.GOOGLE_STANDARD_SQL)
+            .name("SearchIndex")
+            .type("SEARCH")
+            .table("Messages")
+            .interleaveIn("Users")
+            .partitionBy(ImmutableList.of("UserId"))
+            .options(ImmutableList.of("sort_order_sharding=TRUE"));
+    builder
+        .columns()
+        .create()
+        .name("Subject_Tokens")
+        .none()
+        .endIndexColumn()
+        .create()
+        .name("Body_Tokens")
+        .none()
+        .endIndexColumn()
+        .create()
+        .name("Data")
+        .storing()
+        .endIndexColumn()
+        .end();
+    Index index = builder.build();
+    assertThat(
+        index.prettyPrint(),
+        equalToCompressingWhiteSpace(
+            "CREATE SEARCH INDEX `SearchIndex` ON `Messages`(`Subject_Tokens` , `Body_Tokens` )"
+                + " STORING (`Data`) PARTITION BY `UserId`, INTERLEAVE IN `Users` OPTIONS (sort_order_sharding=TRUE)"));
+  }
+
+  @Test
+  public void testVectorIndex() {
+    Index.Builder builder =
+        Index.builder(Dialect.GOOGLE_STANDARD_SQL)
+            .name("VectorIndex")
+            .type("VECTOR")
+            .table("Base")
+            .options(ImmutableList.of("distance_type=\"COSINE\""));
+    builder.columns().create().name("Embeddings").none().endIndexColumn().end();
+    Index index = builder.build();
+    assertThat(
+        index.prettyPrint(),
+        equalToCompressingWhiteSpace(
+            "CREATE VECTOR INDEX `VectorIndex` ON `Base`(`Embeddings` ) OPTIONS (distance_type=\"COSINE\")"));
+  }
+
+  @Test
   public void pgTestIndex() {
     Index.Builder builder =
         Index.builder(Dialect.POSTGRESQL)
@@ -684,6 +820,97 @@ public class DdlTest {
     model.outputColumn("o2").type(Type.float64()).size(-1).endOutputColumn();
 
     assertThrows(IllegalArgumentException.class, () -> model.build().prettyPrint());
+  }
+
+  @Test
+  public void testPropertyGraph() {
+    // Craft Property Declarations
+    PropertyGraph.PropertyDeclaration propertyDeclaration1 =
+        new PropertyGraph.PropertyDeclaration("dummy-prop-name", "dummy-prop-type");
+    PropertyGraph.PropertyDeclaration propertyDeclaration2 =
+        new PropertyGraph.PropertyDeclaration("aliased-prop-name", "dummy-prop-type");
+    ImmutableList<String> propertyDeclsLabel1 =
+        ImmutableList.copyOf(Arrays.asList(propertyDeclaration1.name, propertyDeclaration2.name));
+
+    // Craft Labels and associated property definitions
+    PropertyGraph.GraphElementLabel label1 =
+        new PropertyGraph.GraphElementLabel("dummy-label-name1", propertyDeclsLabel1);
+    GraphElementTable.PropertyDefinition propertyDefinition1 =
+        new PropertyDefinition("dummy-prop-name", "dummy-prop-name");
+    GraphElementTable.PropertyDefinition propertyDefinition2 =
+        new PropertyDefinition(
+            "aliased-prop-name", "CONCAT(CAST(test_col AS STRING), \":\", \"dummy-column\")");
+    GraphElementTable.LabelToPropertyDefinitions labelToPropertyDefinitions1 =
+        new LabelToPropertyDefinitions(
+            label1.name, ImmutableList.of(propertyDefinition1, propertyDefinition2));
+
+    PropertyGraph.GraphElementLabel label2 =
+        new PropertyGraph.GraphElementLabel("dummy-label-name2", ImmutableList.of());
+    GraphElementTable.LabelToPropertyDefinitions labelToPropertyDefinitions2 =
+        new LabelToPropertyDefinitions(label2.name, ImmutableList.of());
+
+    PropertyGraph.GraphElementLabel label3 =
+        new PropertyGraph.GraphElementLabel("dummy-label-name3", ImmutableList.of());
+    GraphElementTable.LabelToPropertyDefinitions labelToPropertyDefinitions3 =
+        new LabelToPropertyDefinitions(label3.name, ImmutableList.of());
+
+    // Craft Node table
+    GraphElementTable.Builder testNodeTable =
+        GraphElementTable.builder()
+            .baseTableName("base-table")
+            .name("node-alias")
+            .kind(GraphElementTable.Kind.NODE)
+            .keyColumns(ImmutableList.of("primary-key"))
+            .labelToPropertyDefinitions(
+                ImmutableList.of(labelToPropertyDefinitions1, labelToPropertyDefinitions2));
+
+    // Craft Edge table
+    GraphElementTable.Builder testEdgeTable =
+        GraphElementTable.builder()
+            .baseTableName("edge-base-table")
+            .name("edge-alias")
+            .kind(GraphElementTable.Kind.EDGE)
+            .keyColumns(ImmutableList.of("edge-primary-key"))
+            .sourceNodeTable(
+                new GraphNodeTableReference(
+                    "base-table",
+                    ImmutableList.of("node-key"),
+                    ImmutableList.of("source-edge-key")))
+            .targetNodeTable(
+                new GraphNodeTableReference(
+                    "base-table",
+                    ImmutableList.of("other-node-key"),
+                    ImmutableList.of("dest-edge-key")))
+            .labelToPropertyDefinitions(ImmutableList.of(labelToPropertyDefinitions3));
+
+    // Build PropertyGraph
+    PropertyGraph.Builder propertyGraph =
+        PropertyGraph.builder()
+            .name("test-graph")
+            .addLabel(label1)
+            .addLabel(label2)
+            .addLabel(label3)
+            .addPropertyDeclaration(propertyDeclaration1)
+            .addPropertyDeclaration(propertyDeclaration2)
+            .addNodeTable(testNodeTable.autoBuild())
+            .addEdgeTable(testEdgeTable.autoBuild());
+
+    assertThat(
+        propertyGraph.build().prettyPrint(),
+        equalToCompressingWhiteSpace(
+            "CREATE PROPERTY GRAPH test-graph "
+                + "NODE TABLES(\n"
+                + "base-table AS node-alias\n"
+                + " KEY (primary-key)\n"
+                + "LABEL dummy-label-name1 "
+                + "PROPERTIES(dummy-prop-name, CONCAT(CAST(test_col AS STRING), \":\", \"dummy-column\") AS aliased-prop-name)\n"
+                + "LABEL dummy-label-name2 NO PROPERTIES)\n"
+                + "EDGE TABLES(\n"
+                + "edge-base-table AS edge-alias\n"
+                + " KEY (edge-primary-key)\n"
+                + "SOURCE KEY(source-edge-key) REFERENCES base-table DESTINATION KEY(dest-edge-key) REFERENCES base-table\n"
+                + "LABEL dummy-label-name3 NO PROPERTIES"
+                + ")"));
   }
 
   @Test
@@ -879,13 +1106,22 @@ public class DdlTest {
     builder.mergeProtoBundle(
         ImmutableSet.of(
             "com.google.cloud.teleport.spanner.tests.TestMessage",
+            "com.google.cloud.teleport.spanner.tests.Order",
+            "com.google.cloud.teleport.spanner.tests.Order.Item",
+            "com.google.cloud.teleport.spanner.tests.Order.Address",
+            "com.google.cloud.teleport.spanner.tests.Order.PaymentMode",
+            "com.google.cloud.teleport.spanner.tests.OrderHistory",
             "com.google.cloud.teleport.spanner.tests.TestEnum"));
     Ddl ddl = builder.build();
     String expectedProtoBundle =
         "CREATE PROTO BUNDLE ("
-            + " com.google.cloud.teleport.spanner.tests.TestMessage,"
-            + " com.google.cloud.teleport.spanner.tests.TestEnum,"
-            + ")";
+            + "\n\t`com.google.cloud.teleport.spanner.tests.TestMessage`,"
+            + "\n\t`com.google.cloud.teleport.spanner.tests.Order.PaymentMode`,"
+            + "\n\t`com.google.cloud.teleport.spanner.tests.Order.Item`,"
+            + "\n\t`com.google.cloud.teleport.spanner.tests.Order.Address`,"
+            + "\n\t`com.google.cloud.teleport.spanner.tests.Order`,"
+            + "\n\t`com.google.cloud.teleport.spanner.tests.TestEnum`,"
+            + "\n\t`com.google.cloud.teleport.spanner.tests.OrderHistory`,)";
     assertThat(ddl.prettyPrint(), equalToCompressingWhiteSpace(expectedProtoBundle));
 
     List<String> statements = ddl.statements();
@@ -1022,6 +1258,8 @@ public class DdlTest {
     assertThrows(NullPointerException.class, () -> foreignKeyBuilder.referencedTable(null));
     assertThrows(NullPointerException.class, () -> foreignKeyBuilder.dialect(null));
     assertThrows(NullPointerException.class, () -> foreignKeyBuilder.referentialAction(null));
+    // Setting null is OK for isEnforced since it's not supported for Postgres
+    foreignKeyBuilder.isEnforced(null);
     assertThrows(IllegalStateException.class, () -> foreignKeyBuilder.build());
     ForeignKey foreignKey =
         foreignKeyBuilder.name("fk").table("table1").referencedTable("table2").build();

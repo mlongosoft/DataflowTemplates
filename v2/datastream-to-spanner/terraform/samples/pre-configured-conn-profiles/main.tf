@@ -26,6 +26,16 @@ resource "google_storage_bucket_object" "session_file_object" {
   bucket       = var.datastream_params.target_gcs_bucket_name
 }
 
+# upload local schema overrides file to the created GCS bucket
+resource "google_storage_bucket_object" "schema_overrides_file_object" {
+  count        = var.dataflow_params.template_params.local_schema_overrides_file_path != null ? 1 : 0
+  depends_on   = [google_project_service.enabled_apis]
+  name         = "schema-overrides.json"
+  source       = var.dataflow_params.template_params.local_schema_overrides_file_path
+  content_type = "application/json"
+  bucket       = var.datastream_params.target_gcs_bucket_name
+}
+
 # Configure permissions to publish Pub/Sub notifications
 resource "google_pubsub_topic_iam_member" "gcs_publisher_role" {
   count      = var.common_params.add_policies_to_service_account ? 1 : 0
@@ -161,6 +171,13 @@ resource "google_dataflow_flex_template_job" "live_migration_job" {
     directoryWatchDurationInMinutes = tostring(var.dataflow_params.template_params.directory_watch_duration_in_minutes)
     spannerPriority                 = var.dataflow_params.template_params.spanner_priority
     dlqGcsPubSubSubscription        = var.dataflow_params.template_params.dlq_gcs_pub_sub_subscription
+    transformationJarPath           = var.dataflow_params.template_params.transformation_jar_path
+    transformationClassName         = var.dataflow_params.template_params.transformation_class_name
+    transformationCustomParameters  = var.dataflow_params.template_params.transformation_custom_parameters
+    filteredEventsDirectory         = var.dataflow_params.template_params.filtered_events_directory
+    tableOverrides                  = var.dataflow_params.template_params.table_overrides
+    columnOverrides                 = var.dataflow_params.template_params.column_overrides
+    schemaOverridesFilePath         = var.dataflow_params.template_params.local_schema_overrides_file_path != null ? "gs://${google_storage_bucket_object.schema_overrides_file_object[0].bucket}/${google_storage_bucket_object.schema_overrides_file_object[0].name}" : null
   }
 
   # Additional Job Configurations
@@ -178,7 +195,7 @@ resource "google_dataflow_flex_template_job" "live_migration_job" {
   service_account_email        = var.dataflow_params.runner_params.service_account_email
   skip_wait_on_job_termination = var.dataflow_params.runner_params.skip_wait_on_job_termination
   staging_location             = var.dataflow_params.runner_params.staging_location
-  subnetwork                   = var.common_params.host_project != null ? "https://www.googleapis.com/compute/v1/projects/${var.common_params.host_project}/regions/${var.common_params.region}/subnetworks/${var.dataflow_params.runner_params.subnetwork}" : "https://www.googleapis.com/compute/v1/projects/${var.common_params.project}/regions/${var.common_params.region}/subnetworks/${var.dataflow_params.runner_params.subnetwork}"
+  subnetwork                   = var.dataflow_params.runner_params.subnetwork != null ? var.common_params.host_project != null ? "https://www.googleapis.com/compute/v1/projects/${var.common_params.host_project}/regions/${var.common_params.region}/subnetworks/${var.dataflow_params.runner_params.subnetwork}" : "https://www.googleapis.com/compute/v1/projects/${var.common_params.project}/regions/${var.common_params.region}/subnetworks/${var.dataflow_params.runner_params.subnetwork}" : null
   temp_location                = var.dataflow_params.runner_params.temp_location
   on_delete                    = var.dataflow_params.runner_params.on_delete
   region                       = var.common_params.region
