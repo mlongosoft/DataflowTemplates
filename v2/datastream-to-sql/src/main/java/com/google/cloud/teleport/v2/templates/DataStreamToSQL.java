@@ -172,7 +172,7 @@ public class DataStreamToSQL {
     @TemplateParameter.Enum(
         order = 7,
         optional = true,
-        enumOptions = {@TemplateEnumOption("postgres"), @TemplateEnumOption("mysql")},
+        enumOptions = {@TemplateEnumOption("postgres"), @TemplateEnumOption("mysql"), @TemplateEnumOption("oracle")},
         description = "SQL Database Type (postgres or mysql).",
         helpText = "The database type to write to (for example, Postgres).")
     @Default.String("postgres")
