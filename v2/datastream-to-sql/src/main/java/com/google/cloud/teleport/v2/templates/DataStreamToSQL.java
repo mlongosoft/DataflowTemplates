@@ -99,7 +99,7 @@ public class DataStreamToSQL {
    * <p>Inherits standard configuration options.
    */
   public interface Options extends PipelineOptions, StreamingOptions {
-    @TemplateParameter.GcsReadFile(
+    @TemplateParameter.Text(
         order = 1,
         groupName = "Source",
         description = "File location for Datastream file input in Cloud Storage.",
@@ -411,6 +411,7 @@ public class DataStreamToSQL {
             LOG.info("Driver SOURCE string: {}", jdbcDriverName);
             LOG.info("USER SOURCE string: {}", options.getSourceDatabaseUser());
             LOG.info("PWD SOURCE string: {}", options.getSourceDatabasePassword());
+            LOG.info("Immagine buildta il 02/12/2024 16:17");
             String secretValue = getSecretValue(options.getSourceDatabasePassword());
             CdcJdbcIO.DataSourceConfiguration dataSourceConfiguration =
                     CdcJdbcIO.DataSourceConfiguration.create(jdbcDriverName, jdbcDriverConnectionString)
