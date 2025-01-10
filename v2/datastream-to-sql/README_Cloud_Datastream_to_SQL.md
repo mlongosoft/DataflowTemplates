@@ -102,7 +102,7 @@ mvn clean package -PtemplatesStage  \
 ```
 
 ```shell
-  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-isa-qa -DbucketName=isa-flex-template  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL  -Dcheckstyle.skip
+  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-isa-qa -DbucketName=isa-flex-template  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL  -DstagePrefix=templates  -Dcheckstyle.skip
 ```
 
 
@@ -116,7 +116,7 @@ mvn clean package -PtemplatesStage  \
 ````
 
 ````shell
-  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-mapo-no-prod -DbucketName=mapo-flex-template-noprod  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west1-docker.pkg.dev/groupama-mapo-no-prod/gcf-artifacts/cloud-datastream-to-sql
+  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-mapo-no-prod -DbucketName=mapo-flex-template-noprod  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west3-docker.pkg.dev/groupama-mapo-no-prod/dataflow-repository/cloud-datastream-to-sql-ar
 ````
 
 The command should build and save the template to Google Cloud, and then print

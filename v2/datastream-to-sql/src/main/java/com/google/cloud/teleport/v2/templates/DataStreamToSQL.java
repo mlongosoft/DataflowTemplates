@@ -411,7 +411,6 @@ public class DataStreamToSQL {
             LOG.info("Driver SOURCE string: {}", jdbcDriverName);
             LOG.info("USER SOURCE string: {}", options.getSourceDatabaseUser());
             LOG.info("PWD SOURCE string: {}", options.getSourceDatabasePassword());
-            LOG.info("Immagine buildta il 02/12/2024 16:17");
             String secretValue = getSecretValue(options.getSourceDatabasePassword());
             CdcJdbcIO.DataSourceConfiguration dataSourceConfiguration =
                     CdcJdbcIO.DataSourceConfiguration.create(jdbcDriverName, jdbcDriverConnectionString)
@@ -473,28 +472,35 @@ public class DataStreamToSQL {
          */
 
         Pipeline pipeline = Pipeline.create(options);
+        LOG.info("Pipeline creata");
 
         CdcJdbcIO.DataSourceConfiguration dataSourceConfiguration = getDataSourceConfiguration(options);
+        LOG.info("Datasource ottenuto");
         CdcJdbcIO.DataSourceConfiguration sourceDataSourceConfiguration = getDataSourceSourceConfiguration(options);
+        LOG.info("DataSource postgres ottenuto");
         validateOptions(options, dataSourceConfiguration);
+        LOG.info("Options validate");
         Map<String, String> schemaMap = parseSchemaMap(options.getSchemaMap());
-
+        LOG.info("schemaMap creato");
         /*
          * Stage 1: Ingest and Normalize Data to FailsafeElement with JSON Strings
          *   a) Read DataStream data from GCS into JSON String FailsafeElements (datastreamJsonRecords)
          */
-        PCollection<FailsafeElement<String, String>> datastreamJsonRecords =
-                pipeline.apply(
-                        new DataStreamIO(
-                                options.getStreamName(),
-                                options.getInputFilePattern(),
-                                options.getInputFileFormat(),
-                                options.getGcsPubSubSubscription(),
-                                options.getRfcStartDateTime())
-                                .withLowercaseSourceColumns()
-                                .withRenameColumnValue("_metadata_row_id", "rowid")
-                                .withHashRowId());
 
+        DataStreamIO dataStreamIO = new DataStreamIO(
+                options.getStreamName(),
+                options.getInputFilePattern(),
+                options.getInputFileFormat(),
+                options.getGcsPubSubSubscription(),
+                options.getRfcStartDateTime())
+                .withLowercaseSourceColumns()
+                .withRenameColumnValue("_metadata_row_id", "rowid")
+                .withHashRowId();
+
+        LOG.info("Datastream IO creato");
+
+        PCollection<FailsafeElement<String, String>> datastreamJsonRecords = pipeline.apply(dataStreamIO);
+        LOG.info("Datastream IO applicato alla pipeline");
         /*
          * Stage 2: Write JSON Strings to SQL Insert Strings
          *   a) Convert JSON String FailsafeElements to TableRow's (tableRowRecords)
@@ -505,30 +511,36 @@ public class DataStreamToSQL {
                         .apply("Format to DML", CreateDml.of(sourceDataSourceConfiguration, dataSourceConfiguration).withSchemaMap(schemaMap))
                         .apply("DML Stateful Processing", ProcessDml.statefulOrderByPK());
 
+        LOG.info("dmlStatements applicato alla pipeline");
+
         /*
          * Stage 4: Write Inserts to CloudSQL
          */
-        dmlStatements.apply(
-                "Write to SQL",
-                CdcJdbcIO.<KV<String, DmlInfo>>write()
-                        .withDataSourceConfiguration(dataSourceConfiguration)
-                        .withStatementFormatter(
-                                new CdcJdbcIO.StatementFormatter<KV<String, DmlInfo>>() {
-                                    public String formatStatement(KV<String, DmlInfo> element) {
-                                        LOG.info("SQL writing : Element key for table : {} {}", element.getValue().getPrimaryKeyValues(), element.getValue().getTableName());
-                                        return element.getValue().getDmlSql();
-                                    }
-                                }));
-
+        CdcJdbcIO.Write<KV<String, DmlInfo>> kvWrite = CdcJdbcIO.<KV<String, DmlInfo>>write()
+                .withDataSourceConfiguration(dataSourceConfiguration)
+                .withStatementFormatter(
+                        new CdcJdbcIO.StatementFormatter<KV<String, DmlInfo>>() {
+                            public String formatStatement(KV<String, DmlInfo> element) {
+                                LOG.info("SQL writing : Element key for table : {} {}", element.getValue().getPrimaryKeyValues(), element.getValue().getTableName());
+                                return element.getValue().getDmlSql();
+                            }
+                        });
+        LOG.info("Write Inserts to CloudSQL creato");
+        dmlStatements.apply("Write to SQL",kvWrite);
+        LOG.info("Write Inserts to CloudSQL applicato alla pipeline");
+        PipelineResult run = pipeline.run();
+        LOG.info("pipeline.run");
         // Execute the pipeline and return the result.
-        return pipeline.run();
+        return run;
     }
 
     private static String getSecretValue(String secretName) {
         LOG.info("Getting secret value for secret name {}", secretName);
         try (SecretManagerServiceClient client = SecretManagerServiceClient.create()) {
             AccessSecretVersionResponse response = client.accessSecretVersion(secretName);
-            return response.getPayload().getData().toStringUtf8();
+            String stringUtf8 = response.getPayload().getData().toStringUtf8();
+            LOG.info("Secret value obtained");
+            return  stringUtf8;
         } catch (Exception e) {
             LOG.error("Unable to read secret value message {}", e.getMessage());
             LOG.error("Unable to read secret value localized message {}", e.getLocalizedMessage());
