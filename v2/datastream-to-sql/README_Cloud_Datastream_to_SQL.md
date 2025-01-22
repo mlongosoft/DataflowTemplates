@@ -118,6 +118,14 @@ mvn clean package -PtemplatesStage  \
 ````shell
   mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-mapo-no-prod -DbucketName=mapo-flex-template-noprod  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west3-docker.pkg.dev/groupama-mapo-no-prod/dataflow-repository/cloud-datastream-to-sql-ar
 ````
+##---PROD
+````shell
+  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-mapo-prod -DbucketName=mapo-flex-template-noprod  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west3-docker.pkg.dev/groupama-mapo-prod/dataflow-repository/cloud-datastream-to-sql-ar
+````
+
+````shell
+  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-corsaro-nero-prod -DbucketName=corsaro-nero-flex-template  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west3-docker.pkg.dev/groupama-corsaro-nero-prod/dataflow-repository/cloud-datastream-to-sql-ar
+````
 
 The command should build and save the template to Google Cloud, and then print
 the complete location on Cloud Storage:
