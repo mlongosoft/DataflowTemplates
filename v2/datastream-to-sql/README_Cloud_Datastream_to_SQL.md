@@ -101,30 +101,13 @@ mvn clean package -PtemplatesStage  \
 -f v2/datastream-to-sql
 ```
 
-```shell
-  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-isa-qa -DbucketName=isa-flex-template  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL  -DstagePrefix=templates  -Dcheckstyle.skip
-```
-
-
-```shell
-  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-corsaro-nero-noprod -DbucketName=corsaro-nero-flex-template-noprod  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL   -Dcheckstyle.skip
-```
-
-
-````shell
-  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-mapo-no-prod -DbucketName=mapo-flex-template-noprod  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip 
-````
-
-````shell
-  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-mapo-no-prod -DbucketName=mapo-flex-template-noprod  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west3-docker.pkg.dev/groupama-mapo-no-prod/dataflow-repository/cloud-datastream-to-sql-ar
-````
 ##---PROD
 ````shell
-  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-mapo-prod -DbucketName=mapo-flex-template-prod  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west3-docker.pkg.dev/groupama-mapo-prod/dataflow-repository/cloud-datastream-to-sql
+  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-mapo-prod -DbucketName=mapo-flex-template-prod  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west3-docker.pkg.dev/groupama-mapo-prod/dataflow-repository/datastream-to-sql -DartifactRegistry=europe-west3-docker.pkg.dev -f v2/datastream-to-sql
 ````
 
 ````shell
-  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-corsaro-nero-prod -DbucketName=corsaro-nero-flex-template  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west3-docker.pkg.dev/groupama-corsaro-nero-prod/dataflow-repository/cloud-datastream-to-sql
+ mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-corsaro-nero-prod -DbucketName=corsaro-nero-flex-template  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west3-docker.pkg.dev/groupama-corsaro-nero-prod/dataflow-repository/datastream-to-sql -DartifactRegistry=europe-west3-docker.pkg.dev -f v2/datastream-to-sql
 ````
 
 The command should build and save the template to Google Cloud, and then print
