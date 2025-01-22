@@ -120,11 +120,11 @@ mvn clean package -PtemplatesStage  \
 ````
 ##---PROD
 ````shell
-  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-mapo-prod -DbucketName=mapo-flex-template-noprod  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west3-docker.pkg.dev/groupama-mapo-prod/dataflow-repository/cloud-datastream-to-sql-ar
+  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-mapo-prod -DbucketName=mapo-flex-template-noprod  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west3-docker.pkg.dev/groupama-mapo-prod/dataflow-repository/cloud-datastream-to-sql
 ````
 
 ````shell
-  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-corsaro-nero-prod -DbucketName=corsaro-nero-flex-template  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west3-docker.pkg.dev/groupama-corsaro-nero-prod/dataflow-repository/cloud-datastream-to-sql-ar
+  mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-corsaro-nero-prod -DbucketName=corsaro-nero-flex-template  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west3-docker.pkg.dev/groupama-corsaro-nero-prod/dataflow-repository/cloud-datastream-to-sql
 ````
 
 The command should build and save the template to Google Cloud, and then print
