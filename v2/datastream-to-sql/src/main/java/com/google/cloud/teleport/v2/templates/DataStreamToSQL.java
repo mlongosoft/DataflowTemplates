@@ -8,8 +8,8 @@
  *   http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
  * License for the specific language governing permissions and limitations under
  * the License.
  */
@@ -30,17 +30,28 @@ import com.google.cloud.teleport.v2.values.FailsafeElement;
 import com.google.cloud.secretmanager.v1.SecretManagerServiceClient;
 import com.google.cloud.secretmanager.v1.AccessSecretVersionResponse;
 import com.google.common.base.Splitter;
+
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineResult;
 import org.apache.beam.sdk.options.Default;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.options.StreamingOptions;
+import org.apache.beam.sdk.transforms.GroupByKey;
+import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.TypeDescriptor;
+import org.apache.beam.sdk.values.TypeDescriptors;
+import org.checkerframework.checker.initialization.qual.Initialized;
+import org.checkerframework.checker.nullness.qual.NonNull;
+import org.checkerframework.checker.nullness.qual.UnknownKeyFor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -93,92 +104,92 @@ public class DataStreamToSQL {
     private static final String AVRO_SUFFIX = "avro";
     private static final String JSON_SUFFIX = "json";
 
-  /**
-   * Options supported by the pipeline.
-   *
-   * <p>Inherits standard configuration options.
-   */
-  public interface Options extends PipelineOptions, StreamingOptions {
-    @TemplateParameter.Text(
-        order = 1,
-        groupName = "Source",
-        description = "File location for Datastream file input in Cloud Storage.",
-        helpText =
-            "The file location for the Datastream files in Cloud Storage to replicate. This file location is typically the root path for the stream.")
-    String getInputFilePattern();
+    /**
+     * Options supported by the pipeline.
+     *
+     * <p>Inherits standard configuration options.
+     */
+    public interface Options extends PipelineOptions, StreamingOptions {
+        @TemplateParameter.Text(
+                order = 1,
+                groupName = "Source",
+                description = "File location for Datastream file input in Cloud Storage.",
+                helpText =
+                        "The file location for the Datastream files in Cloud Storage to replicate. This file location is typically the root path for the stream.")
+        String getInputFilePattern();
 
         void setInputFilePattern(String value);
 
-    @TemplateParameter.PubsubSubscription(
-        order = 2,
-        optional = true,
-        description = "The Pub/Sub subscription being used in a Cloud Storage notification policy.",
-        helpText =
-            "The Pub/Sub subscription with Datastream file notifications."
-                + " For example, `projects/<PROJECT_ID>/subscriptions/<SUBSCRIPTION_ID>`.")
-    String getGcsPubSubSubscription();
+        @TemplateParameter.PubsubSubscription(
+                order = 2,
+                optional = true,
+                description = "The Pub/Sub subscription being used in a Cloud Storage notification policy.",
+                helpText =
+                        "The Pub/Sub subscription with Datastream file notifications."
+                                + " For example, `projects/<PROJECT_ID>/subscriptions/<SUBSCRIPTION_ID>`.")
+        String getGcsPubSubSubscription();
 
-    void setGcsPubSubSubscription(String value);
+        void setGcsPubSubSubscription(String value);
 
-    @TemplateParameter.Enum(
-        order = 3,
-        enumOptions = {@TemplateEnumOption("avro"), @TemplateEnumOption("json")},
-        optional = true,
-        description = "Datastream output file format (avro/json).",
-        helpText =
-            "The format of the output file produced by Datastream. For example, `avro` or `json`. Defaults to `avro`.")
-    @Default.String("avro")
-    String getInputFileFormat();
+        @TemplateParameter.Enum(
+                order = 3,
+                enumOptions = {@TemplateEnumOption("avro"), @TemplateEnumOption("json")},
+                optional = true,
+                description = "Datastream output file format (avro/json).",
+                helpText =
+                        "The format of the output file produced by Datastream. For example, `avro` or `json`. Defaults to `avro`.")
+        @Default.String("avro")
+        String getInputFileFormat();
 
-    void setInputFileFormat(String value);
+        void setInputFileFormat(String value);
 
-    @TemplateParameter.Text(
-        order = 4,
-        groupName = "Source",
-        optional = true,
-        description = "Name or template for the stream to poll for schema information.",
-        helpText =
-            "The name or template for the stream to poll for schema information. The default value is `{_metadata_stream}`.")
-    String getStreamName();
+        @TemplateParameter.Text(
+                order = 4,
+                groupName = "Source",
+                optional = true,
+                description = "Name or template for the stream to poll for schema information.",
+                helpText =
+                        "The name or template for the stream to poll for schema information. The default value is `{_metadata_stream}`.")
+        String getStreamName();
 
-    void setStreamName(String value);
+        void setStreamName(String value);
 
-    @TemplateParameter.DateTime(
-        order = 5,
-        optional = true,
-        description =
-            "The starting DateTime used to fetch from Cloud Storage "
-                + "(https://tools.ietf.org/html/rfc3339).",
-        helpText =
-            "The starting DateTime used to fetch from Cloud Storage "
-                + "(https://tools.ietf.org/html/rfc3339).")
-    @Default.String("1970-01-01T00:00:00.00Z")
-    String getRfcStartDateTime();
+        @TemplateParameter.DateTime(
+                order = 5,
+                optional = true,
+                description =
+                        "The starting DateTime used to fetch from Cloud Storage "
+                                + "(https://tools.ietf.org/html/rfc3339).",
+                helpText =
+                        "The starting DateTime used to fetch from Cloud Storage "
+                                + "(https://tools.ietf.org/html/rfc3339).")
+        @Default.String("1970-01-01T00:00:00.00Z")
+        String getRfcStartDateTime();
 
-    void setRfcStartDateTime(String value);
+        void setRfcStartDateTime(String value);
 
-    // DataStream API Root Url (only used for testing)
-    @TemplateParameter.Text(
-        order = 6,
-        optional = true,
-        description = "Datastream API Root URL (only required for testing)",
-        helpText = "Datastream API Root URL")
-    @Default.String("https://datastream.googleapis.com/")
-    String getDataStreamRootUrl();
+        // DataStream API Root Url (only used for testing)
+        @TemplateParameter.Text(
+                order = 6,
+                optional = true,
+                description = "Datastream API Root URL (only required for testing)",
+                helpText = "Datastream API Root URL")
+        @Default.String("https://datastream.googleapis.com/")
+        String getDataStreamRootUrl();
 
-    void setDataStreamRootUrl(String value);
+        void setDataStreamRootUrl(String value);
 
-    // SQL Connection Parameters
-    @TemplateParameter.Enum(
-        order = 7,
-        optional = true,
-        enumOptions = {@TemplateEnumOption("postgres"), @TemplateEnumOption("mysql"), @TemplateEnumOption("oracle")},
-        description = "SQL Database Type (postgres or mysql).",
-        helpText = "The database type to write to (for example, Postgres).")
-    @Default.String("postgres")
-    String getDatabaseType();
+        // SQL Connection Parameters
+        @TemplateParameter.Enum(
+                order = 7,
+                optional = true,
+                enumOptions = {@TemplateEnumOption("postgres"), @TemplateEnumOption("mysql"), @TemplateEnumOption("oracle")},
+                description = "SQL Database Type (postgres or mysql).",
+                helpText = "The database type to write to (for example, Postgres).")
+        @Default.String("postgres")
+        String getDatabaseType();
 
-    void setDatabaseType(String value);
+        void setDatabaseType(String value);
 
         @TemplateParameter.Text(
                 order = 8,
@@ -187,7 +198,7 @@ public class DataStreamToSQL {
                 helpText = "(description=(retry_count=)(retry_delay=)(address=(protocol=(()()())(connect_data=....")
         String getDatabaseHost();
 
-    void setDatabaseHost(String value);
+        void setDatabaseHost(String value);
 
         @TemplateParameter.Text(
                 order = 9,
@@ -198,16 +209,16 @@ public class DataStreamToSQL {
         @Default.String("")
         String getDatabasePort();
 
-    void setDatabasePort(String value);
+        void setDatabasePort(String value);
 
-    @TemplateParameter.Text(
-        order = 10,
-        description = "Database User to connect with.",
-        helpText =
-            "The SQL user with all required permissions to write to all tables in replication.")
-    String getDatabaseUser();
+        @TemplateParameter.Text(
+                order = 10,
+                description = "Database User to connect with.",
+                helpText =
+                        "The SQL user with all required permissions to write to all tables in replication.")
+        String getDatabaseUser();
 
-    void setDatabaseUser(String value);
+        void setDatabaseUser(String value);
 
         @TemplateParameter.Password(
                 order = 11,
@@ -217,8 +228,18 @@ public class DataStreamToSQL {
 
         void setDatabasePassword(String value);
 
+//        @TemplateParameter.Text(
+//                order = 12,
+//                groupName = "Target",
+//                description = "Database target max connection",
+//                helpText = "10")
+//        @Default.Integer(10)
+//        Integer getMaxConnection();
+//
+//        void setMaxConnection(String value);
+
         @TemplateParameter.Text(
-                order = 12,
+                order = 13,
                 groupName = "Target",
                 optional = true,
                 description = "SQL Database Name.",
@@ -229,7 +250,7 @@ public class DataStreamToSQL {
         void setDatabaseName(String value);
 
         @TemplateParameter.Text(
-                order = 13,
+                order = 14,
                 optional = true,
                 description = "A map of key/values used to dictate schema name changes",
                 helpText =
@@ -241,7 +262,7 @@ public class DataStreamToSQL {
         void setSchemaMap(String value);
 
         @TemplateParameter.Text(
-                order = 14,
+                order = 15,
                 groupName = "Target",
                 optional = true,
                 description = "Custom connection string.",
@@ -253,7 +274,7 @@ public class DataStreamToSQL {
         void setCustomConnectionString(String value);
 
         @TemplateParameter.Text(
-                order = 15,
+                order = 16,
                 optional = true,
                 description = "Custom connection string.",
                 helpText =
@@ -264,7 +285,7 @@ public class DataStreamToSQL {
         void setSourceDatabaseType(String value);
 
         @TemplateParameter.Text(
-                order = 16,
+                order = 17,
                 optional = true,
                 description = "Custom connection string.",
                 helpText =
@@ -274,7 +295,7 @@ public class DataStreamToSQL {
         void setSourceDatabaseHost(String value);
 
         @TemplateParameter.Text(
-                order = 17,
+                order = 18,
                 optional = true,
                 description = "Custom connection string.",
                 helpText =
@@ -285,7 +306,7 @@ public class DataStreamToSQL {
         void setSourceDatabasePort(String value);
 
         @TemplateParameter.Text(
-                order = 18,
+                order = 19,
                 optional = true,
                 description = "Custom connection string.",
                 helpText =
@@ -295,7 +316,7 @@ public class DataStreamToSQL {
         void setSourceDatabaseUser(String value);
 
         @TemplateParameter.Text(
-                order = 19,
+                order = 20,
                 optional = true,
                 description = "Sercret Name Source DB",
                 helpText =
@@ -305,7 +326,7 @@ public class DataStreamToSQL {
         void setSourceDatabasePassword(String value);
 
         @TemplateParameter.Text(
-                order = 20,
+                order = 21,
                 optional = true,
                 description = "Custom connection string.",
                 helpText =
@@ -383,7 +404,7 @@ public class DataStreamToSQL {
                     CdcJdbcIO.DataSourceConfiguration.create(jdbcDriverName, jdbcDriverConnectionString)
                             .withUsername(options.getDatabaseUser())
                             .withPassword(secretValue)
-                            .withMaxIdleConnections(new Integer(0));
+                            .withMaxIdleConnections(0);
 
             return dataSourceConfiguration;
         } catch (Exception e) {
@@ -416,7 +437,7 @@ public class DataStreamToSQL {
                     CdcJdbcIO.DataSourceConfiguration.create(jdbcDriverName, jdbcDriverConnectionString)
                             .withUsername(options.getSourceDatabaseUser())
                             .withPassword(secretValue)
-                            .withMaxIdleConnections(new Integer(0));
+                            .withMaxIdleConnections(0);
             return dataSourceConfiguration;
         } catch (Exception e) {
             LOG.error("Error in creating source data source configuration");
@@ -513,21 +534,32 @@ public class DataStreamToSQL {
 
         LOG.info("dmlStatements applicato alla pipeline");
 
+        // Raggruppa per nome tabella
+        PCollection<KV<String, Iterable<DmlInfo>>> dmlStatementsByTable =
+                dmlStatements
+                        .apply("Group DML by Table",
+                                MapElements.into(TypeDescriptors.kvs(TypeDescriptors.strings(), TypeDescriptor.of(DmlInfo.class)))
+                                        .via(kv -> KV.of(kv.getValue().getTableName(), kv.getValue())))
+                        .apply(GroupByKey.create());
+
         /*
-         * Stage 4: Write Inserts to CloudSQL
+         * Stage 4: Write Inserts to CloudSQL in batch per tabella
          */
-        CdcJdbcIO.Write<KV<String, DmlInfo>> kvWrite = CdcJdbcIO.<KV<String, DmlInfo>>write()
+        CdcJdbcIO.Write<KV<String, Iterable<DmlInfo>>> kvWrite = CdcJdbcIO.<KV<String, Iterable<DmlInfo>>>write()
                 .withDataSourceConfiguration(dataSourceConfiguration)
-                .withStatementFormatter(
-                        new CdcJdbcIO.StatementFormatter<KV<String, DmlInfo>>() {
-                            public String formatStatement(KV<String, DmlInfo> element) {
-                                LOG.info("SQL writing : Element key for table : {} {}", element.getValue().getPrimaryKeyValues(), element.getValue().getTableName());
-                                return element.getValue().getDmlSql();
-                            }
-                        });
-        LOG.info("Write Inserts to CloudSQL creato");
-        dmlStatements.apply("Write to SQL",kvWrite);
-        LOG.info("Write Inserts to CloudSQL applicato alla pipeline");
+                .withBatchSize(100)
+                .withStatementBatchFormatter((KV<String, Iterable<DmlInfo>> element) -> {
+                    List<String> statements = new ArrayList<>();
+                    for (DmlInfo dmlInfo : element.getValue()) {
+                        statements.add(dmlInfo.getDmlSql());
+                    }
+                    LOG.info("Batch SQL writing for table {}: {} statements", element.getKey(), statements.size());
+                    return statements;
+                });
+
+        LOG.info("Write batch Inserts to CloudSQL creato");
+        dmlStatementsByTable.apply("Write batch to SQL", kvWrite);
+        LOG.info("Write batch Inserts to CloudSQL applicato alla pipeline");
         PipelineResult run = pipeline.run();
         LOG.info("pipeline.run");
         // Execute the pipeline and return the result.
@@ -540,7 +572,7 @@ public class DataStreamToSQL {
             AccessSecretVersionResponse response = client.accessSecretVersion(secretName);
             String stringUtf8 = response.getPayload().getData().toStringUtf8();
             LOG.info("Secret value obtained");
-            return  stringUtf8;
+            return stringUtf8;
         } catch (Exception e) {
             LOG.error("Unable to read secret value message {}", e.getMessage());
             LOG.error("Unable to read secret value localized message {}", e.getLocalizedMessage());

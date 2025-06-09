@@ -42,7 +42,7 @@ public class CreateDml
 
   private static final Logger LOG = LoggerFactory.getLogger(CreateDml.class);
   private static final String WINDOW_DURATION = "1s";
-  private static final Integer NUM_THREADS = new Integer(100);
+  private static final Integer NUM_THREADS = 100;
   private static DataSourceConfiguration dataSourceConfiguration;
   private static DataSourceConfiguration targetDataSourceConfiguration;
   private static Map<String, String> schemaMap = new HashMap<String, String>();
