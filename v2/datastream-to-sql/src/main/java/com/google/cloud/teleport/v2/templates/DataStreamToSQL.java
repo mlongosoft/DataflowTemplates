@@ -32,6 +32,7 @@ import com.google.cloud.secretmanager.v1.AccessSecretVersionResponse;
 import com.google.common.base.Splitter;
 import java.sql.SQLException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineResult;
@@ -383,7 +384,8 @@ public class DataStreamToSQL {
                     CdcJdbcIO.DataSourceConfiguration.create(jdbcDriverName, jdbcDriverConnectionString)
                             .withUsername(options.getDatabaseUser())
                             .withPassword(secretValue)
-                            .withMaxIdleConnections(new Integer(0));
+                            .withConnectionInitSqls(List.of("ALTER SESSION DISABLE PARALLEL DML"))
+                            .withMaxIdleConnections(0);
 
             return dataSourceConfiguration;
         } catch (Exception e) {
