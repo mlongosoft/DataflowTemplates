@@ -100,7 +100,7 @@ public class DataStreamToSQL {
    * <p>Inherits standard configuration options.
    */
   public interface Options extends PipelineOptions, StreamingOptions {
-    @TemplateParameter.Text(
+    @TemplateParameter.GcsReadFile(
         order = 1,
         groupName = "Source",
         description = "File location for Datastream file input in Cloud Storage.",
@@ -108,7 +108,7 @@ public class DataStreamToSQL {
             "The file location for the Datastream files in Cloud Storage to replicate. This file location is typically the root path for the stream.")
     String getInputFilePattern();
 
-        void setInputFilePattern(String value);
+    void setInputFilePattern(String value);
 
     @TemplateParameter.PubsubSubscription(
         order = 2,
@@ -316,22 +316,35 @@ public class DataStreamToSQL {
         void setSourceDatabaseName(String value);
 
     }
+    void setCustomConnectionString(String value);
 
-    /**
-     * Main entry point for executing the pipeline.
-     *
-     * @param args The command-line arguments to the pipeline.
-     */
-    public static void main(String[] args) {
-        UncaughtExceptionLogger.register();
+    @TemplateParameter.Integer(
+        order = 15,
+        optional = true,
+        description = "Number of threads to use for Format to DML step.",
+        helpText =
+            "Determines key parallelism of Format to DML step, specifically, the value is passed into Reshuffle.withNumBuckets.")
+    @Default.Integer(100)
+    int getNumThreads();
 
-        LOG.info("Starting Datastream to SQL");
+    void setNumThreads(int value);
+  }
 
-        Options options = PipelineOptionsFactory.fromArgs(args).withValidation().as(Options.class);
+  /**
+   * Main entry point for executing the pipeline.
+   *
+   * @param args The command-line arguments to the pipeline.
+   */
+  public static void main(String[] args) {
+    UncaughtExceptionLogger.register();
 
-        options.setStreaming(true);
-        run(options);
-    }
+    LOG.info("Starting Datastream to SQL");
+
+    Options options = PipelineOptionsFactory.fromArgs(args).withValidation().as(Options.class);
+
+    options.setStreaming(true);
+    run(options);
+  }
 
     /**
      * Build the DataSourceConfiguration for the target SQL database. Using the pipeline options,
@@ -489,29 +502,32 @@ public class DataStreamToSQL {
          *   a) Read DataStream data from GCS into JSON String FailsafeElements (datastreamJsonRecords)
          */
 
-        DataStreamIO dataStreamIO = new DataStreamIO(
-                options.getStreamName(),
-                options.getInputFilePattern(),
-                options.getInputFileFormat(),
-                options.getGcsPubSubSubscription(),
-                options.getRfcStartDateTime())
-                .withLowercaseSourceColumns()
-                .withRenameColumnValue("_metadata_row_id", "rowid")
-                .withHashRowId();
+        pipeline.apply(
+                new DataStreamIO(
+                        options.getStreamName(),
+                        options.getInputFilePattern(),
+                        options.getInputFileFormat(),
+                        options.getGcsPubSubSubscription(),
+                        options.getRfcStartDateTime())
+                        .withLowercaseSourceColumns()
+                        .withRenameColumnValue("_metadata_row_id", "rowid")
+                        .withHashRowId());
 
-        LOG.info("Datastream IO creato");
+    /*
+     * Stage 2: Write JSON Strings to SQL Insert Strings
+     *   a) Convert JSON String FailsafeElements to TableRow's (tableRowRecords)
+     * Stage 3) Filter stale rows using stateful PK transform
+     */
+    PCollection<KV<String, DmlInfo>> dmlStatements =
+        datastreamJsonRecords
+            .apply(
+                "Format to DML",
+                CreateDml.of(dataSourceConfiguration)
+                    .withSchemaMap(schemaMap)
+                    .withNumThreads(options.getNumThreads()))
+            .apply("DML Stateful Processing", ProcessDml.statefulOrderByPK());
 
-        PCollection<FailsafeElement<String, String>> datastreamJsonRecords = pipeline.apply(dataStreamIO);
-        LOG.info("Datastream IO applicato alla pipeline");
-        /*
-         * Stage 2: Write JSON Strings to SQL Insert Strings
-         *   a) Convert JSON String FailsafeElements to TableRow's (tableRowRecords)
-         * Stage 3) Filter stale rows using stateful PK transform
-         */
-        PCollection<KV<String, DmlInfo>> dmlStatements =
-                datastreamJsonRecords
-                        .apply("Format to DML", CreateDml.of(sourceDataSourceConfiguration, dataSourceConfiguration).withSchemaMap(schemaMap))
-                        .apply("DML Stateful Processing", ProcessDml.statefulOrderByPK());
+        LOG.info("dmlStatements applicato alla pipeline");
 
         LOG.info("dmlStatements applicato alla pipeline");
 

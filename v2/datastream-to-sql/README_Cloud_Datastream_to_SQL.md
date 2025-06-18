@@ -1,8 +1,7 @@
 Datastream to SQL template
---------------------------
-
-The Datastream to SQL template is a streaming pipeline that reads [a
-href="https://cloud.google.com/datastream/docs"](a%0Ahref=%22https://cloud.google.com/datastream/docs%22)Datastream</a> data and
+---
+The Datastream to SQL template is a streaming pipeline that reads <a
+href="https://cloud.google.com/datastream/docs">Datastream</a> data and
 replicates it into any MySQL or PostgreSQL database. The template reads data from
 Cloud Storage using Pub/Sub notifications and replicates this data into SQL
 replica tables.
@@ -23,6 +22,7 @@ table.
 If no primary keys exist, deletes are ignored.
 If you are using the Oracle to Postgres utilities, add <code>ROWID</code> in SQL
 as the primary key when none exists.
+
 
 :memo: This is a Google-provided template! Please
 check [Provided templates documentation](https://cloud.google.com/dataflow/docs/guides/templates/provided/datastream-to-sql)
@@ -53,12 +53,13 @@ on [Metadata Annotations](https://github.com/GoogleCloudPlatform/DataflowTemplat
 * **databaseName**: The name of the SQL database to connect to. The default value is `postgres`.
 * **schemaMap**: A map of key/values used to dictate schema name changes (ie. old_name:new_name,CaseError:case_error). Defaults to empty.
 * **customConnectionString**: Optional connection string which will be used instead of the default database string.
+* **numThreads**: Determines key parallelism of Format to DML step, specifically, the value is passed into Reshuffle.withNumBuckets. Defaults to: 100.
 
 ## Getting Started
 
 ### Requirements
 
-* Java 11
+* Java 17
 * Maven
 * [gcloud CLI](https://cloud.google.com/sdk/gcloud), and execution of the
   following commands:
@@ -125,7 +126,7 @@ The specific path should be copied as it will be used in the following steps.
 
 #### Running the Template
 
-**Using 
+**Using the staged template**:
 
 You can use the path above run the template (or share with others for execution).
 
@@ -135,43 +136,42 @@ need valid resources for the required parameters.
 Provided that, the following command line can be used:
 
 ```shell
-export PROJECT=XXXXX
-export BUCKET_NAME=XXXXX
-export REGION=europe-west3
-export TEMPLATE_SPEC_GCSPATH=XXXXX
+export PROJECT=<my-project>
+export BUCKET_NAME=<bucket-name>
+export REGION=us-central1
+export TEMPLATE_SPEC_GCSPATH="gs://$BUCKET_NAME/templates/flex/Cloud_Datastream_to_SQL"
 
 ### Required
-export INPUT_FILE_PATTERN=XXXXx
-export DATABASE_HOST=XXXXX
-export DATABASE_USER=XXXXX
-export DATABASE_PASSWORD=XXXXX
+export INPUT_FILE_PATTERN=<inputFilePattern>
+export DATABASE_HOST=<databaseHost>
+export DATABASE_USER=<databaseUser>
+export DATABASE_PASSWORD=<databasePassword>
 
 ### Optional
-export GCS_PUB_SUB_SUBSCRIPTION=XXXXX
+export GCS_PUB_SUB_SUBSCRIPTION=<gcsPubSubSubscription>
 export INPUT_FILE_FORMAT=avro
-export DATABASE_TYPE=oracle
-export DATABASE_PORT=XXXXX
-export DATABASE_NAME=XXXXX
-
-export DATABASE_HOST=XXXXX
-export DATABASE_USER=XXXXX
-export DATABASE_PASSWORD=XXXXX
-export DATABASE_TYPE=oracle
-export DATABASE_PORT=XXXXX
-export DATABASE_NAME=XXXXX
-
-
-
+export STREAM_NAME=<streamName>
+export RFC_START_DATE_TIME=1970-01-01T00:00:00.00Z
+export DATA_STREAM_ROOT_URL=https://datastream.googleapis.com/
+export DATABASE_TYPE=postgres
+export DATABASE_PORT=5432
+export DATABASE_NAME=postgres
+export SCHEMA_MAP=""
+export CUSTOM_CONNECTION_STRING=""
+export NUM_THREADS=100
 
 gcloud dataflow flex-template run "cloud-datastream-to-sql-job" \
   --project "$PROJECT" \
   --region "$REGION" \
   --template-file-gcs-location "$TEMPLATE_SPEC_GCSPATH" \
-    --parameters "network=XXXXX" \
+  --parameters "network=XXXXX" \
   --parameters "subnetwork=https://www.googleapis.com/compute/v1/projects/XXXXX/regions/europe-west3/subnetworks/XXXXX" \
   --parameters "inputFilePattern=$INPUT_FILE_PATTERN" \
   --parameters "gcsPubSubSubscription=$GCS_PUB_SUB_SUBSCRIPTION" \
   --parameters "inputFileFormat=$INPUT_FILE_FORMAT" \
+  --parameters "streamName=$STREAM_NAME" \
+  --parameters "rfcStartDateTime=$RFC_START_DATE_TIME" \
+  --parameters "dataStreamRootUrl=$DATA_STREAM_ROOT_URL" \
   --parameters "databaseType=$DATABASE_TYPE" \
   --parameters "databaseHost=$DATABASE_HOST" \
   --parameters "databasePort=$DATABASE_PORT" \
@@ -184,6 +184,9 @@ gcloud dataflow flex-template run "cloud-datastream-to-sql-job" \
   --parameters "sourceDatabaseHost=XXXXX" \
   --parameters "sourceDatabasePort=XXXXX" \
   --parameters "sourceDatabaseName=XXXXX"
+  --parameters "schemaMap=$SCHEMA_MAP" \
+  --parameters "customConnectionString=$CUSTOM_CONNECTION_STRING" \
+  --parameters "numThreads=$NUM_THREADS"
 ```
 
 For more information about the command, please check:
@@ -217,6 +220,7 @@ export DATABASE_PORT=5432
 export DATABASE_NAME=postgres
 export SCHEMA_MAP=""
 export CUSTOM_CONNECTION_STRING=""
+export NUM_THREADS=100
 
 mvn clean package -PtemplatesRun \
 -DskipTests \
@@ -225,7 +229,7 @@ mvn clean package -PtemplatesRun \
 -Dregion="$REGION" \
 -DjobName="cloud-datastream-to-sql-job" \
 -DtemplateName="Cloud_Datastream_to_SQL" \
--Dparameters="inputFilePattern=$INPUT_FILE_PATTERN,gcsPubSubSubscription=$GCS_PUB_SUB_SUBSCRIPTION,inputFileFormat=$INPUT_FILE_FORMAT,streamName=$STREAM_NAME,rfcStartDateTime=$RFC_START_DATE_TIME,dataStreamRootUrl=$DATA_STREAM_ROOT_URL,databaseType=$DATABASE_TYPE,databaseHost=$DATABASE_HOST,databasePort=$DATABASE_PORT,databaseUser=$DATABASE_USER,databasePassword=$DATABASE_PASSWORD,databaseName=$DATABASE_NAME,schemaMap=$SCHEMA_MAP,customConnectionString=$CUSTOM_CONNECTION_STRING" \
+-Dparameters="inputFilePattern=$INPUT_FILE_PATTERN,gcsPubSubSubscription=$GCS_PUB_SUB_SUBSCRIPTION,inputFileFormat=$INPUT_FILE_FORMAT,streamName=$STREAM_NAME,rfcStartDateTime=$RFC_START_DATE_TIME,dataStreamRootUrl=$DATA_STREAM_ROOT_URL,databaseType=$DATABASE_TYPE,databaseHost=$DATABASE_HOST,databasePort=$DATABASE_PORT,databaseUser=$DATABASE_USER,databasePassword=$DATABASE_PASSWORD,databaseName=$DATABASE_NAME,schemaMap=$SCHEMA_MAP,customConnectionString=$CUSTOM_CONNECTION_STRING,numThreads=$NUM_THREADS" \
 -f v2/datastream-to-sql
 ```
 
@@ -284,6 +288,7 @@ resource "google_dataflow_flex_template_job" "cloud_datastream_to_sql" {
     # databaseName = "postgres"
     # schemaMap = ""
     # customConnectionString = ""
+    # numThreads = "100"
   }
 }
 ```
