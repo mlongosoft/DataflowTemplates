@@ -38,21 +38,6 @@ export TEMPLATE_IMAGE_SPEC=${BUCKET_NAME}/images/${IMAGE_NAME}-image-spec.json
 gcloud config set project ${PROJECT}
 ```
 
-```sh
-export PROJECT=groupama-isa-qa
-export IMAGE_NAME=datastream-to-sql
-export BUCKET_NAME=gs://isa-flex-template
-export TARGET_GCR_IMAGE=gcr.io/${PROJECT}/${IMAGE_NAME}
-export BASE_CONTAINER_IMAGE=gcr.io/dataflow-templates-base/java11-template-launcher-base
-export BASE_CONTAINER_IMAGE_VERSION=latest
-export APP_ROOT=/template/${IMAGE_NAME}
-export DATAFLOW_JAVA_COMMAND_SPEC=${APP_ROOT}/resources/${IMAGE_NAME}-command-spec.json
-export TEMPLATE_IMAGE_SPEC=${BUCKET_NAME}/images/${IMAGE_NAME}-image-spec.json
-
-gcloud config set project ${PROJECT}
-```
-
-
 * Build and push image to Google Container Repository
 
 ```sh

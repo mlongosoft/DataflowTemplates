@@ -44,16 +44,14 @@ public class CreateDml
   private static final String WINDOW_DURATION = "1s";
   private static Integer numThreads = Integer.valueOf(100);
   private static DataSourceConfiguration dataSourceConfiguration;
-  private static DataSourceConfiguration targetDataSourceConfiguration;
   private static Map<String, String> schemaMap = new HashMap<String, String>();
 
-  private CreateDml(DataSourceConfiguration dataSourceConfiguration, DataSourceConfiguration targetDataSourceConfiguration) {
+  private CreateDml(DataSourceConfiguration dataSourceConfiguration) {
     this.dataSourceConfiguration = dataSourceConfiguration;
-    this.targetDataSourceConfiguration = targetDataSourceConfiguration;
   }
 
-  public static CreateDml of(DataSourceConfiguration dataSourceConfiguration,DataSourceConfiguration targetDataSourceConfiguration) {
-    return new CreateDml(dataSourceConfiguration,targetDataSourceConfiguration);
+  public static CreateDml of(DataSourceConfiguration dataSourceConfiguration) {
+    return new CreateDml(dataSourceConfiguration);
   }
 
   public CreateDml withSchemaMap(Map<String, String> schemaMap) {
@@ -68,7 +66,7 @@ public class CreateDml
 
   public DatastreamToDML getDatastreamToDML() {
     DatastreamToDML datastreamToDML;
-    String driverName = this.targetDataSourceConfiguration.getDriverClassName().get();
+    String driverName = this.dataSourceConfiguration.getDriverClassName().get();
     switch (driverName) {
       case "org.postgresql.Driver":
         datastreamToDML =
@@ -79,7 +77,7 @@ public class CreateDml
             DatastreamToMySQLDML.of(dataSourceConfiguration).withSchemaMap(this.schemaMap);
         break;
       case "oracle.jdbc.driver.OracleDriver":
-        datastreamToDML= DatastreamToOracleDML.of(dataSourceConfiguration);
+        datastreamToDML = DatastreamToOracleDML.of(dataSourceConfiguration);
         break;
       default:
         throw new IllegalArgumentException(

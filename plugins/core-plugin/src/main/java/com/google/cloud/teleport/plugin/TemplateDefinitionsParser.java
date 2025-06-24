@@ -64,7 +64,7 @@ public final class TemplateDefinitionsParser {
       } catch (URISyntaxException e) {
         throw new RuntimeException(e);
       }
-      if (!loc.getPath().startsWith(outputDir.getPath())) {
+      if (!loc.getPath().startsWith("/" + outputDir.getPath().replace("\\", "/"))) {
         LOG.info("Skip " + templateClass.getName() + " from dependency module " + loc);
         continue;
       }

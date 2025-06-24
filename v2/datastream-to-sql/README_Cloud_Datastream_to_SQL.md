@@ -112,9 +112,10 @@ mvn clean package -PtemplatesStage  \
 ````
 
 ````shell
- mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-isa-prod -DbucketName=isa-prod-flex-template  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL_Edited -Dcheckstyle.skip -Dimage=europe-west3-docker.pkg.dev/groupama-isa-prod/dataflow-repository/datastream-to-sql-edited -DartifactRegistry=europe-west3-docker.pkg.dev
+ mvn clean package -PtemplatesStage  -DskipTests  -DprojectId=groupama-isa-prod -DbucketName=isa-prod-flex-template  -DstagePrefix=templates  -DtemplateName=Cloud_Datastream_to_SQL -Dcheckstyle.skip -Dimage=europe-west3-docker.pkg.dev/groupama-isa-prod/dataflow-repository/datastream-to-sql-edited -DartifactRegistry=europe-west3-docker.pkg.dev
 ````
 
+[//]: # (-Dbase-container-image=gcr.io/dataflow-templates-base/java17-template-launcher-base-distroless -Dbase-container-image.version=latest -U)
 The command should build and save the template to Google Cloud, and then print
 the complete location on Cloud Storage:
 
