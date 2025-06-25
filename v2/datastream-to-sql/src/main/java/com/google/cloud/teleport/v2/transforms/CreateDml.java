@@ -18,12 +18,8 @@ package com.google.cloud.teleport.v2.transforms;
 import com.google.cloud.teleport.v2.datastream.io.CdcJdbcIO.DataSourceConfiguration;
 import com.google.cloud.teleport.v2.datastream.values.DmlInfo;
 import com.google.cloud.teleport.v2.utils.DatastreamToDML;
-import com.google.cloud.teleport.v2.utils.DatastreamToMySQLDML;
 import com.google.cloud.teleport.v2.utils.DatastreamToOracleDML;
-import com.google.cloud.teleport.v2.utils.DatastreamToPostgresDML;
 import com.google.cloud.teleport.v2.values.FailsafeElement;
-import java.util.HashMap;
-import java.util.Map;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.Reshuffle;
@@ -31,6 +27,9 @@ import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * The {@code CreateDml} class batches data to ensure connection limits and builds the DmlInfo
@@ -44,14 +43,16 @@ public class CreateDml
   private static final String WINDOW_DURATION = "1s";
   private static Integer numThreads = Integer.valueOf(100);
   private static DataSourceConfiguration dataSourceConfiguration;
+  private static DataSourceConfiguration targetDataSourceConfiguration;
   private static Map<String, String> schemaMap = new HashMap<String, String>();
 
-  private CreateDml(DataSourceConfiguration dataSourceConfiguration) {
+  private CreateDml(DataSourceConfiguration dataSourceConfiguration, DataSourceConfiguration targetDataSourceConfiguration) {
     this.dataSourceConfiguration = dataSourceConfiguration;
+    this.targetDataSourceConfiguration = targetDataSourceConfiguration;
   }
 
-  public static CreateDml of(DataSourceConfiguration dataSourceConfiguration) {
-    return new CreateDml(dataSourceConfiguration);
+  public static CreateDml of(DataSourceConfiguration dataSourceConfiguration,DataSourceConfiguration targetDataSourceConfiguration) {
+    return new CreateDml(dataSourceConfiguration,targetDataSourceConfiguration);
   }
 
   public CreateDml withSchemaMap(Map<String, String> schemaMap) {
@@ -66,18 +67,18 @@ public class CreateDml
 
   public DatastreamToDML getDatastreamToDML() {
     DatastreamToDML datastreamToDML;
-    String driverName = this.dataSourceConfiguration.getDriverClassName().get();
+    String driverName = this.targetDataSourceConfiguration.getDriverClassName().get();
     switch (driverName) {
-      case "org.postgresql.Driver":
-        datastreamToDML =
-            DatastreamToPostgresDML.of(dataSourceConfiguration).withSchemaMap(this.schemaMap);
-        break;
-      case "com.mysql.cj.jdbc.Driver":
-        datastreamToDML =
-            DatastreamToMySQLDML.of(dataSourceConfiguration).withSchemaMap(this.schemaMap);
-        break;
+//      case "org.postgresql.Driver":
+//        datastreamToDML =
+//            DatastreamToPostgresDML.of(dataSourceConfiguration).withSchemaMap(this.schemaMap);
+//        break;
+//      case "com.mysql.cj.jdbc.Driver":
+//        datastreamToDML =
+//            DatastreamToMySQLDML.of(dataSourceConfiguration).withSchemaMap(this.schemaMap);
+//        break;
       case "oracle.jdbc.driver.OracleDriver":
-        datastreamToDML = DatastreamToOracleDML.of(dataSourceConfiguration);
+        datastreamToDML= DatastreamToOracleDML.of(dataSourceConfiguration);
         break;
       default:
         throw new IllegalArgumentException(
@@ -95,6 +96,6 @@ public class CreateDml
         .apply(
             "Reshuffle Into Buckets",
             Reshuffle.<FailsafeElement<String, String>>viaRandomKey().withNumBuckets(numThreads))
-        .apply("Format to Postgres DML", ParDo.of(datastreamToDML));
+        .apply("Format to DML", ParDo.of(datastreamToDML));
   }
 }

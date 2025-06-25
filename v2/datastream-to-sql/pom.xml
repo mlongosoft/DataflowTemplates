@@ -32,6 +32,13 @@
         Stream CDC Data from DataStream to SQL via GCS
     </description>
 
+    <properties>
+        <beam.version>2.65.0</beam.version>
+        <base-container-image>gcr.io/dataflow-templates-base/java17-template-launcher-base</base-container-image>
+        <base-container-image.version>latest</base-container-image.version>
+    </properties>
+
+
     <dependencies>
         <dependency>
             <groupId>com.google.cloud.teleport.v2</groupId>
@@ -44,14 +51,19 @@
             <version>${postgresql.version}</version>
         </dependency>
         <dependency>
+            <groupId>com.oracle.database.jdbc</groupId>
+            <artifactId>ojdbc8</artifactId>
+            <version>${ojdbc8.version}</version>
+        </dependency>
+        <dependency>
             <groupId>mysql</groupId>
             <artifactId>mysql-connector-java</artifactId>
             <version>${mysql-connector-java.version}</version>
             <exclusions>
-              <exclusion>
-                <groupId>com.google.protobuf</groupId>
-                <artifactId>*</artifactId>
-              </exclusion>
+                <exclusion>
+                    <groupId>com.google.protobuf</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <!-- Test dependencies -->
@@ -77,12 +89,6 @@
             <groupId>com.google.cloud.teleport</groupId>
             <artifactId>it-jdbc</artifactId>
             <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.oracle.database.jdbc</groupId>
-            <artifactId>ojdbc8</artifactId>
-            <version>${ojdbc8.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
